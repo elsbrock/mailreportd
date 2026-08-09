@@ -1,4 +1,11 @@
-package feeder
+// Package imaptest provides a real in-memory IMAP server for tests, plus
+// report fixtures.
+//
+// The feeder's correctness lives in protocol details — UID semantics, peeking
+// rather than marking read, UIDVALIDITY changes — and a hand-rolled fake would
+// simply agree with whatever the feeder does. Tests here drive the real client
+// against a real server over a real socket.
+package imaptest
 
 import (
 	"bytes"
@@ -23,14 +30,14 @@ import (
 // rather than marking read, UIDVALIDITY changes — and a hand-rolled fake would
 // simply agree with whatever the feeder does. This exercises the actual client
 // against an actual server.
-type testMailbox struct {
+type Mailbox struct {
 	addr     string
 	user     *imapmemserver.User
 	username string
 	password string
 }
 
-func newTestMailbox(t *testing.T) *testMailbox {
+func NewMailbox(t *testing.T) *Mailbox {
 	t.Helper()
 
 	const (
@@ -66,7 +73,7 @@ func newTestMailbox(t *testing.T) *testMailbox {
 		listener.Close()
 	})
 
-	return &testMailbox{
+	return &Mailbox{
 		addr:     listener.Addr().String(),
 		user:     user,
 		username: username,
@@ -74,7 +81,7 @@ func newTestMailbox(t *testing.T) *testMailbox {
 	}
 }
 
-func (m *testMailbox) hostPort(t *testing.T) (string, int) {
+func (m *Mailbox) HostPort(t *testing.T) (string, int) {
 	t.Helper()
 	host, port, err := net.SplitHostPort(m.addr)
 	if err != nil {
@@ -88,7 +95,7 @@ func (m *testMailbox) hostPort(t *testing.T) (string, int) {
 }
 
 // deliver appends a message to the mailbox over the wire, as a real MTA would.
-func (m *testMailbox) deliver(t *testing.T, body []byte) {
+func (m *Mailbox) Deliver(t *testing.T, body []byte) {
 	t.Helper()
 
 	client, err := imapclient.DialInsecure(m.addr, nil)
@@ -115,27 +122,18 @@ func (m *testMailbox) deliver(t *testing.T, body []byte) {
 }
 
 // feederConfig returns a config pointing at this mailbox.
-func (m *testMailbox) feederConfig(t *testing.T, name, tenant string) IMAPConfig {
-	t.Helper()
-	host, port := m.hostPort(t)
-	return IMAPConfig{
-		Name:     name,
-		Tenant:   tenant,
-		Host:     host,
-		Port:     port,
-		Username: m.username,
-		Password: m.password,
-		Mailbox:  "INBOX",
-		Interval: time.Minute,
-		Insecure: true,
-	}
+func (m *Mailbox) Credentials() (username, password string) {
+	return m.username, m.password
 }
+
+// Addr is the host:port the server is listening on.
+func (m *Mailbox) Addr() string { return m.addr }
 
 // --- report fixtures --------------------------------------------------------
 
 // aggregateXML reports a window ending twelve hours ago so fixtures always fall
 // inside the daemon's aggregation window, whenever the suite runs.
-func aggregateXML(reportID, domain string, pass, fail int) string {
+func AggregateXML(reportID, domain string, pass, fail int) string {
 	end := time.Now().Add(-12 * time.Hour)
 	begin := end.Add(-24 * time.Hour)
 
@@ -164,7 +162,7 @@ func aggregateXML(reportID, domain string, pass, fail int) string {
 </feedback>`, reportID, begin.Unix(), end.Unix(), domain, pass, domain, domain, fail, domain)
 }
 
-func tlsJSON(reportID, domain string, successful, failed int) string {
+func TLSJSON(reportID, domain string, successful, failed int) string {
 	end := time.Now().Add(-12 * time.Hour)
 	begin := end.Add(-24 * time.Hour)
 
@@ -189,7 +187,7 @@ func tlsJSON(reportID, domain string, successful, failed int) string {
 
 // reportMail wraps a payload in a realistic multipart message with a gzip
 // attachment, which is how every large receiver actually sends these.
-func reportMail(t *testing.T, subject, filename, payload string) []byte {
+func ReportMail(t *testing.T, subject, filename, payload string) []byte {
 	t.Helper()
 
 	var gzbuf bytes.Buffer
@@ -225,7 +223,7 @@ func reportMail(t *testing.T, subject, filename, payload string) []byte {
 	return []byte(b.String())
 }
 
-func plainMail(subject, body string) []byte {
+func PlainMail(subject, body string) []byte {
 	return []byte(fmt.Sprintf(
 		"From: someone@example.com\r\nTo: dmarc@example.org\r\nSubject: %s\r\n"+
 			"Message-Id: <%s@example.com>\r\nContent-Type: text/plain\r\n\r\n%s\r\n",

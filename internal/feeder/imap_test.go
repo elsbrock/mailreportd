@@ -11,8 +11,27 @@ import (
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
 
+	"github.com/elsbrock/mailreportd/internal/imaptest"
 	"github.com/elsbrock/mailreportd/internal/store"
 )
+
+// feederConfig points a feeder at a test mailbox.
+func feederConfig(t *testing.T, m *imaptest.Mailbox, name, tenant string) IMAPConfig {
+	t.Helper()
+	host, port := m.HostPort(t)
+	username, password := m.Credentials()
+	return IMAPConfig{
+		Name:     name,
+		Tenant:   tenant,
+		Host:     host,
+		Port:     port,
+		Username: username,
+		Password: password,
+		Mailbox:  "INBOX",
+		Interval: time.Minute,
+		Insecure: true,
+	}
+}
 
 func quietLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -29,15 +48,15 @@ func testStore(t *testing.T) *store.Store {
 }
 
 func TestIMAPFeederIngestsReports(t *testing.T) {
-	mailbox := newTestMailbox(t)
+	mailbox := imaptest.NewMailbox(t)
 	s := testStore(t)
 
-	mailbox.deliver(t, reportMail(t, "Report Domain: example.org", "a.xml.gz",
-		aggregateXML("report-a", "example.org", 100, 4)))
-	mailbox.deliver(t, reportMail(t, "Report Domain: example.org TLS", "b.json.gz",
-		tlsJSON("tls-a", "example.org", 412, 3)))
+	mailbox.Deliver(t, imaptest.ReportMail(t, "Report Domain: example.org", "a.xml.gz",
+		imaptest.AggregateXML("report-a", "example.org", 100, 4)))
+	mailbox.Deliver(t, imaptest.ReportMail(t, "Report Domain: example.org TLS", "b.json.gz",
+		imaptest.TLSJSON("tls-a", "example.org", 412, 3)))
 
-	f := NewIMAP(mailbox.feederConfig(t, "mailbox", "default"), s, quietLogger())
+	f := NewIMAP(feederConfig(t, mailbox, "mailbox", "default"), s, quietLogger())
 
 	stats, err := f.Run(context.Background())
 	if err != nil {
@@ -64,12 +83,12 @@ func TestIMAPFeederIngestsReports(t *testing.T) {
 }
 
 func TestIMAPFeederIsIncremental(t *testing.T) {
-	mailbox := newTestMailbox(t)
+	mailbox := imaptest.NewMailbox(t)
 	s := testStore(t)
-	f := NewIMAP(mailbox.feederConfig(t, "mailbox", "default"), s, quietLogger())
+	f := NewIMAP(feederConfig(t, mailbox, "mailbox", "default"), s, quietLogger())
 	ctx := context.Background()
 
-	mailbox.deliver(t, reportMail(t, "r1", "a.xml.gz", aggregateXML("report-a", "example.org", 10, 1)))
+	mailbox.Deliver(t, imaptest.ReportMail(t, "r1", "a.xml.gz", imaptest.AggregateXML("report-a", "example.org", 10, 1)))
 	if stats, err := f.Run(ctx); err != nil || stats.Messages != 1 {
 		t.Fatalf("first run: stats = %+v err = %v", stats, err)
 	}
@@ -84,7 +103,7 @@ func TestIMAPFeederIsIncremental(t *testing.T) {
 	}
 
 	// A new arrival is picked up, and only that one.
-	mailbox.deliver(t, reportMail(t, "r2", "b.xml.gz", aggregateXML("report-b", "example.org", 20, 2)))
+	mailbox.Deliver(t, imaptest.ReportMail(t, "r2", "b.xml.gz", imaptest.AggregateXML("report-b", "example.org", 20, 2)))
 	stats, err = f.Run(ctx)
 	if err != nil {
 		t.Fatalf("third run: %v", err)
@@ -100,24 +119,25 @@ func TestIMAPFeederIsIncremental(t *testing.T) {
 }
 
 func TestIMAPFeederDoesNotMarkMessagesRead(t *testing.T) {
-	mailbox := newTestMailbox(t)
+	mailbox := imaptest.NewMailbox(t)
 	s := testStore(t)
 
-	mailbox.deliver(t, reportMail(t, "r1", "a.xml.gz", aggregateXML("report-a", "example.org", 10, 1)))
+	mailbox.Deliver(t, imaptest.ReportMail(t, "r1", "a.xml.gz", imaptest.AggregateXML("report-a", "example.org", 10, 1)))
 
-	f := NewIMAP(mailbox.feederConfig(t, "mailbox", "default"), s, quietLogger())
+	f := NewIMAP(feederConfig(t, mailbox, "mailbox", "default"), s, quietLogger())
 	if _, err := f.Run(context.Background()); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 
 	// The mailbox may well be one a human also reads. Ingesting a report must
 	// not silently mark it seen.
-	client, err := imapclient.DialInsecure(mailbox.addr, nil)
+	username, password := mailbox.Credentials()
+	client, err := imapclient.DialInsecure(mailbox.Addr(), nil)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
 	defer client.Close()
-	if err := client.Login(mailbox.username, mailbox.password).Wait(); err != nil {
+	if err := client.Login(username, password).Wait(); err != nil {
 		t.Fatalf("login: %v", err)
 	}
 	if _, err := client.Select("INBOX", &imap.SelectOptions{ReadOnly: true}).Wait(); err != nil {
@@ -136,13 +156,13 @@ func TestIMAPFeederDoesNotMarkMessagesRead(t *testing.T) {
 }
 
 func TestIMAPFeederIsIdempotentAcrossCursorReset(t *testing.T) {
-	mailbox := newTestMailbox(t)
+	mailbox := imaptest.NewMailbox(t)
 	s := testStore(t)
-	cfg := mailbox.feederConfig(t, "mailbox", "default")
+	cfg := feederConfig(t, mailbox, "mailbox", "default")
 	ctx := context.Background()
 
-	mailbox.deliver(t, reportMail(t, "r1", "a.xml.gz", aggregateXML("report-a", "example.org", 10, 1)))
-	mailbox.deliver(t, reportMail(t, "r2", "b.xml.gz", aggregateXML("report-b", "example.org", 20, 2)))
+	mailbox.Deliver(t, imaptest.ReportMail(t, "r1", "a.xml.gz", imaptest.AggregateXML("report-a", "example.org", 10, 1)))
+	mailbox.Deliver(t, imaptest.ReportMail(t, "r2", "b.xml.gz", imaptest.AggregateXML("report-b", "example.org", 20, 2)))
 
 	if _, err := NewIMAP(cfg, s, quietLogger()).Run(ctx); err != nil {
 		t.Fatalf("first run: %v", err)
@@ -175,16 +195,16 @@ func TestIMAPFeederIsIdempotentAcrossCursorReset(t *testing.T) {
 }
 
 func TestIMAPFeederHandlesNonReports(t *testing.T) {
-	mailbox := newTestMailbox(t)
+	mailbox := imaptest.NewMailbox(t)
 	s := testStore(t)
 	ctx := context.Background()
 
 	// A realistic mailbox: one real report among autoreplies and spam.
-	mailbox.deliver(t, plainMail("Out of office", "Back on Monday."))
-	mailbox.deliver(t, reportMail(t, "r1", "a.xml.gz", aggregateXML("report-a", "example.org", 10, 1)))
-	mailbox.deliver(t, plainMail("Undelivered Mail Returned to Sender", "550 no such user"))
+	mailbox.Deliver(t, imaptest.PlainMail("Out of office", "Back on Monday."))
+	mailbox.Deliver(t, imaptest.ReportMail(t, "r1", "a.xml.gz", imaptest.AggregateXML("report-a", "example.org", 10, 1)))
+	mailbox.Deliver(t, imaptest.PlainMail("Undelivered Mail Returned to Sender", "550 no such user"))
 
-	stats, err := NewIMAP(mailbox.feederConfig(t, "mailbox", "default"), s, quietLogger()).Run(ctx)
+	stats, err := NewIMAP(feederConfig(t, mailbox, "mailbox", "default"), s, quietLogger()).Run(ctx)
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -203,16 +223,16 @@ func TestIMAPFeederHandlesNonReports(t *testing.T) {
 }
 
 func TestIMAPFeederQuarantinesBrokenReports(t *testing.T) {
-	mailbox := newTestMailbox(t)
+	mailbox := imaptest.NewMailbox(t)
 	s := testStore(t)
 	ctx := context.Background()
 
 	broken := `<feedback><report_metadata><org_name>broken.example</org_name>
 		<report_id>9</report_id><date_range><begin>1</begin><end>2</end></date_range>
 		</report_metadata><policy_published><domain>example.org</domain></policy_published></feedback>`
-	mailbox.deliver(t, reportMail(t, "broken", "broken.xml.gz", broken))
+	mailbox.Deliver(t, imaptest.ReportMail(t, "broken", "broken.xml.gz", broken))
 
-	stats, err := NewIMAP(mailbox.feederConfig(t, "mailbox", "default"), s, quietLogger()).Run(ctx)
+	stats, err := NewIMAP(feederConfig(t, mailbox, "mailbox", "default"), s, quietLogger()).Run(ctx)
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -236,12 +256,12 @@ func TestIMAPFeederQuarantinesBrokenReports(t *testing.T) {
 }
 
 func TestIMAPFeederAdvancesPastUnparseableMessages(t *testing.T) {
-	mailbox := newTestMailbox(t)
+	mailbox := imaptest.NewMailbox(t)
 	s := testStore(t)
 	ctx := context.Background()
-	cfg := mailbox.feederConfig(t, "mailbox", "default")
+	cfg := feederConfig(t, mailbox, "mailbox", "default")
 
-	mailbox.deliver(t, reportMail(t, "broken", "broken.xml.gz", "not xml at all"))
+	mailbox.Deliver(t, imaptest.ReportMail(t, "broken", "broken.xml.gz", "not xml at all"))
 	if _, err := NewIMAP(cfg, s, quietLogger()).Run(ctx); err != nil {
 		t.Fatalf("first run: %v", err)
 	}
@@ -271,10 +291,10 @@ func TestIMAPFeederReportsUnreachableMailbox(t *testing.T) {
 }
 
 func TestIMAPFeederRejectsBadCredentials(t *testing.T) {
-	mailbox := newTestMailbox(t)
+	mailbox := imaptest.NewMailbox(t)
 	s := testStore(t)
 
-	cfg := mailbox.feederConfig(t, "mailbox", "default")
+	cfg := feederConfig(t, mailbox, "mailbox", "default")
 	cfg.Password = "wrong"
 
 	if _, err := NewIMAP(cfg, s, quietLogger()).Run(context.Background()); err == nil {
