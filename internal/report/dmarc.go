@@ -159,10 +159,10 @@ func normalizeDomain(s string) string {
 // --- wire types -------------------------------------------------------------
 
 type xmlFeedback struct {
-	XMLName  xml.Name     `xml:"feedback"`
-	Metadata xmlMetadata  `xml:"report_metadata"`
-	Policy   xmlPolicy    `xml:"policy_published"`
-	Records  []xmlRecord  `xml:"record"`
+	XMLName  xml.Name    `xml:"feedback"`
+	Metadata xmlMetadata `xml:"report_metadata"`
+	Policy   xmlPolicy   `xml:"policy_published"`
+	Records  []xmlRecord `xml:"record"`
 }
 
 type xmlMetadata struct {

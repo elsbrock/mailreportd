@@ -52,29 +52,29 @@ func (r *Report) Identity() string {
 // It is worth storing because a report evaluated against a stale policy
 // explains results that otherwise look wrong.
 type DMARCPolicy struct {
-	Domain          string
-	ADKIM           string // r or s
-	ASPF            string // r or s
-	P               string // none, quarantine, reject
-	SP              string
-	Pct             int
-	FailureOptions  string
+	Domain         string
+	ADKIM          string // r or s
+	ASPF           string // r or s
+	P              string // none, quarantine, reject
+	SP             string
+	Pct            int
+	FailureOptions string
 }
 
 // DMARCRow is one aggregate record: a count of messages from one source IP
 // that shared an evaluation outcome.
 type DMARCRow struct {
-	SourceIP    netip.Addr
-	Count       int64
-	Disposition string // none, quarantine, reject
-	DKIM        string // aligned result: pass or fail
-	SPF         string // aligned result: pass or fail
-	Reasons     []PolicyOverride
-	HeaderFrom  string
-	EnvelopeTo  string
+	SourceIP     netip.Addr
+	Count        int64
+	Disposition  string // none, quarantine, reject
+	DKIM         string // aligned result: pass or fail
+	SPF          string // aligned result: pass or fail
+	Reasons      []PolicyOverride
+	HeaderFrom   string
+	EnvelopeTo   string
 	EnvelopeFrom string
-	DKIMAuth    []DKIMAuth
-	SPFAuth     []SPFAuth
+	DKIMAuth     []DKIMAuth
+	SPFAuth      []SPFAuth
 }
 
 // Aligned reports whether both mechanisms passed DMARC alignment. This is the
