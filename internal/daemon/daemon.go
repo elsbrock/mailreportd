@@ -267,9 +267,12 @@ func buildFeeders(cfg *config.Config, stores map[string]*store.Store, log *slog.
 
 		switch f.Type {
 		case "imap":
-			password := f.Password()
+			password, err := f.Password()
+			if err != nil {
+				return nil, fmt.Errorf("feeders[%d]: %w", i, err)
+			}
 			if password == "" {
-				return nil, fmt.Errorf("feeders[%d]: environment variable %q is empty", i, f.PasswordEnv)
+				return nil, fmt.Errorf("feeders[%d]: credential is empty", i)
 			}
 			out = append(out, feeder.NewIMAP(feeder.IMAPConfig{
 				Name:     f.Name,

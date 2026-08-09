@@ -34,6 +34,9 @@ feeders:
     host: mail.example.org
     port: 993
     username: dmarc@example.org
+    # One of password_env or password_file. A file is preferred where the
+    # supervisor provides one, e.g. systemd LoadCredential.
     password_env: MAILREPORTD_IMAP_PASSWORD
+    # password_file: /run/credentials/mailreportd.service/imap-password
     mailbox: INBOX
     interval: 5m

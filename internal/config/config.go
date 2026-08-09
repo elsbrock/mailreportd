@@ -8,6 +8,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -101,24 +102,41 @@ type Feeder struct {
 	Tenant string `yaml:"tenant"`
 
 	// IMAP
-	Host        string        `yaml:"host"`
-	Port        int           `yaml:"port"`
-	Username    string        `yaml:"username"`
-	PasswordEnv string        `yaml:"password_env"`
-	Mailbox     string        `yaml:"mailbox"`
-	Interval    time.Duration `yaml:"interval"`
-	Insecure    bool          `yaml:"insecure"`
+	Host        string `yaml:"host"`
+	Port        int    `yaml:"port"`
+	Username    string `yaml:"username"`
+	PasswordEnv string `yaml:"password_env"`
+	// PasswordFile reads the credential from a file, which is how systemd
+	// delivers it via LoadCredential. Preferred over the environment: a
+	// process environment is readable from /proc and tends to end up in crash
+	// dumps and child processes.
+	PasswordFile string        `yaml:"password_file"`
+	Mailbox      string        `yaml:"mailbox"`
+	Interval     time.Duration `yaml:"interval"`
+	Insecure     bool          `yaml:"insecure"`
 }
 
-// Password resolves the feeder credential from the environment. Credentials are
-// never read from the config file itself so that the file stays committable and
-// secrets arrive through sops, systemd credentials, or whatever the operator
-// already uses.
-func (f Feeder) Password() string {
-	if f.PasswordEnv == "" {
-		return ""
+// Password resolves the feeder credential. Credentials are never read from the
+// config file itself so that the file stays committable and secrets arrive
+// through sops, systemd credentials, or whatever the operator already uses.
+//
+// A file wins over the environment when both are set, because the file is the
+// more specific instruction and silently preferring the environment would make
+// a stale variable shadow a rotated credential.
+func (f Feeder) Password() (string, error) {
+	if f.PasswordFile != "" {
+		data, err := os.ReadFile(f.PasswordFile)
+		if err != nil {
+			return "", fmt.Errorf("read password_file %q: %w", f.PasswordFile, err)
+		}
+		// Trailing newlines are near-universal in files written by humans and
+		// by sops; an unstripped one turns into a baffling auth failure.
+		return strings.TrimRight(string(data), "\r\n"), nil
 	}
-	return os.Getenv(f.PasswordEnv)
+	if f.PasswordEnv != "" {
+		return os.Getenv(f.PasswordEnv), nil
+	}
+	return "", nil
 }
 
 // Load reads, defaults, and validates the configuration at path.
@@ -256,8 +274,8 @@ func (c *Config) validate() error {
 			if f.Username == "" {
 				return fmt.Errorf("feeders[%d]: username is required", i)
 			}
-			if f.PasswordEnv == "" {
-				return fmt.Errorf("feeders[%d]: password_env is required", i)
+			if f.PasswordEnv == "" && f.PasswordFile == "" {
+				return fmt.Errorf("feeders[%d]: one of password_env or password_file is required", i)
 			}
 		case "":
 			return fmt.Errorf("feeders[%d]: type is required", i)

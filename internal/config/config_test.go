@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -95,9 +97,9 @@ func TestValidation(t *testing.T) {
 			want: "host is required",
 		},
 		{
-			name: "feeder without password env",
+			name: "feeder without any credential",
 			yaml: minimal + "feeders:\n  - type: imap\n    host: h\n    username: u\n",
-			want: "password_env is required",
+			want: "password_env or password_file",
 		},
 		{
 			name: "unknown feeder type",
@@ -172,7 +174,11 @@ feeders:
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if got := cfg.Feeders[0].Password(); got != "s3cret" {
+	got, err := cfg.Feeders[0].Password()
+	if err != nil {
+		t.Fatalf("password: %v", err)
+	}
+	if got != "s3cret" {
 		t.Errorf("password = %q", got)
 	}
 
@@ -193,4 +199,76 @@ func mustMarshal(t *testing.T, cfg *Config) []byte {
 		cfg.Feeders[0].Username,
 		cfg.Feeders[0].PasswordEnv,
 	}, " "))
+}
+
+func TestPasswordFromFile(t *testing.T) {
+	// systemd's LoadCredential hands the secret over as a file, which is the
+	// shape this deployment actually uses.
+	path := filepath.Join(t.TempDir(), "imap-password")
+	if err := os.WriteFile(path, []byte("from-a-file\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	cfg, err := Parse([]byte(minimal + `
+feeders:
+  - type: imap
+    host: h
+    username: u
+    password_file: ` + path + `
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	got, err := cfg.Feeders[0].Password()
+	if err != nil {
+		t.Fatalf("password: %v", err)
+	}
+	// The trailing newline must be stripped, or authentication fails in a way
+	// that looks like a wrong password.
+	if got != "from-a-file" {
+		t.Errorf("password = %q, want the trimmed file contents", got)
+	}
+}
+
+func TestPasswordFileWinsOverEnvironment(t *testing.T) {
+	t.Setenv("MAILREPORTD_TEST_PW", "from-env")
+
+	path := filepath.Join(t.TempDir(), "pw")
+	if err := os.WriteFile(path, []byte("from-file"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	cfg, err := Parse([]byte(minimal + `
+feeders:
+  - type: imap
+    host: h
+    username: u
+    password_env: MAILREPORTD_TEST_PW
+    password_file: ` + path + `
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	got, _ := cfg.Feeders[0].Password()
+	if got != "from-file" {
+		t.Errorf("password = %q: a stale environment variable must not shadow a rotated file", got)
+	}
+}
+
+func TestPasswordFileMissingIsAnError(t *testing.T) {
+	cfg, err := Parse([]byte(minimal + `
+feeders:
+  - type: imap
+    host: h
+    username: u
+    password_file: /nonexistent/credential
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if _, err := cfg.Feeders[0].Password(); err == nil {
+		t.Fatal("expected an error for a missing credential file")
+	}
 }
