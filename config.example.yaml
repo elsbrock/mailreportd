@@ -1,0 +1,39 @@
+# mailreportd configuration.
+#
+# Credentials are never stored here. Every secret is named by the environment
+# variable that carries it, so this file stays committable.
+
+log:
+  level: info
+  format: text
+
+http:
+  # Reachable from outside; carries /healthz today and TLS-RPT submission later.
+  listen: ":8088"
+  # Keep this on a private interface.
+  metrics_listen: ":9188"
+
+storage:
+  path: /var/lib/mailreportd/reports.db
+  retention:
+    # Source bytes, kept only long enough to debug a parse failure.
+    raw: 168h
+    # Aggregate report rows.
+    aggregate: 8760h
+    # Failure reports contain recipient addresses and message content.
+    forensic: 720h
+
+tenants:
+  - id: default
+    domains:
+      - example.org
+
+feeders:
+  - type: imap
+    tenant: default
+    host: mail.example.org
+    port: 993
+    username: dmarc@example.org
+    password_env: MAILREPORTD_IMAP_PASSWORD
+    mailbox: INBOX
+    interval: 5m
