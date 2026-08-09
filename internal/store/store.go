@@ -369,6 +369,44 @@ func storeReport(ctx context.Context, tx *sql.Tx, tenant string, rawID int64, re
 	return true, nil
 }
 
+// Cursor is a feeder's position in a mailbox.
+type Cursor struct {
+	UIDValidity uint32
+	LastUID     uint32
+}
+
+// Cursor returns the stored position for a feeder. A missing cursor is the zero
+// value, which means "start from the beginning".
+func (s *Store) Cursor(ctx context.Context, feeder string) (Cursor, error) {
+	var c Cursor
+	err := s.db.QueryRowContext(ctx,
+		`SELECT uid_validity, last_uid FROM feeder_cursor WHERE tenant_id = ? AND feeder = ?`,
+		s.tenant, feeder).Scan(&c.UIDValidity, &c.LastUID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Cursor{}, nil
+	}
+	if err != nil {
+		return Cursor{}, fmt.Errorf("read feeder cursor: %w", err)
+	}
+	return c, nil
+}
+
+// SetCursor records a feeder's position.
+func (s *Store) SetCursor(ctx context.Context, feeder string, c Cursor) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO feeder_cursor (tenant_id, feeder, uid_validity, last_uid, updated_at)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT (tenant_id, feeder) DO UPDATE
+		SET uid_validity = excluded.uid_validity,
+		    last_uid     = excluded.last_uid,
+		    updated_at   = excluded.updated_at`,
+		s.tenant, feeder, c.UIDValidity, c.LastUID, time.Now().Unix())
+	if err != nil {
+		return fmt.Errorf("write feeder cursor: %w", err)
+	}
+	return nil
+}
+
 // Retention holds per-class retention windows.
 type Retention struct {
 	Raw       time.Duration

@@ -15,11 +15,13 @@ import (
 
 // Config is the whole of the daemon's runtime configuration.
 type Config struct {
-	Log     Log      `yaml:"log"`
-	HTTP    HTTP     `yaml:"http"`
-	Storage Storage  `yaml:"storage"`
-	Tenants []Tenant `yaml:"tenants"`
-	Feeders []Feeder `yaml:"feeders"`
+	Log            Log            `yaml:"log"`
+	HTTP           HTTP           `yaml:"http"`
+	Storage        Storage        `yaml:"storage"`
+	Metrics        Metrics        `yaml:"metrics"`
+	Classification Classification `yaml:"classification"`
+	Tenants        []Tenant       `yaml:"tenants"`
+	Feeders        []Feeder       `yaml:"feeders"`
 }
 
 // Log controls the structured logging handler.
@@ -28,26 +30,55 @@ type Log struct {
 	Format string `yaml:"format"` // text or json
 }
 
-// HTTP describes the two listeners. They are separate so that the metrics
-// endpoint can stay on a private interface while report submission is exposed.
+// HTTP describes the two listeners.
+//
+// They are separate because they carry different things. The public listener
+// serves only liveness today and TLS-RPT submission later. The private one
+// serves metrics and the read API, both of which expose a domain's sending
+// topology and must not be published.
 type HTTP struct {
 	Listen        string `yaml:"listen"`
 	MetricsListen string `yaml:"metrics_listen"`
 }
 
 // Storage describes the embedded database and how long each class of report is
-// kept. Forensic reports carry recipient addresses and message content, so
-// their retention is separate and expected to be much shorter.
+// kept.
 type Storage struct {
-	Path      string    `yaml:"path"`
-	Retention Retention `yaml:"retention"`
+	Path          string        `yaml:"path"`
+	Retention     Retention     `yaml:"retention"`
+	SweepInterval time.Duration `yaml:"sweep_interval"`
 }
 
-// Retention holds per-class retention windows.
+// Retention holds per-class retention windows. Failure reports carry recipient
+// addresses and message content, so their window is separate and short.
 type Retention struct {
 	Raw       time.Duration `yaml:"raw"`
 	Aggregate time.Duration `yaml:"aggregate"`
 	Forensic  time.Duration `yaml:"forensic"`
+}
+
+// Metrics controls the exported aggregation.
+type Metrics struct {
+	// Window is how far back the exported aggregates reach. Thirty days
+	// comfortably spans the reporting lag of every large receiver.
+	Window time.Duration `yaml:"window"`
+	// RefreshInterval is how often the snapshot is rebuilt. Scrapes serve the
+	// cached snapshot, so this is what bounds metric staleness, not the scrape
+	// interval.
+	RefreshInterval time.Duration `yaml:"refresh_interval"`
+}
+
+// Classification controls how report sources are attributed.
+type Classification struct {
+	// TrustedSources are addresses or prefixes always treated as our own.
+	//
+	// This exists for senders that legitimately cannot appear in SPF, such as a
+	// relay that only signs with DKIM. It is an override, not the mechanism:
+	// the default answer comes from the domain's own SPF record, so the daemon
+	// stays correct when the infrastructure changes.
+	TrustedSources []string `yaml:"trusted_sources"`
+	// CacheTTL is how long an SPF expansion is reused.
+	CacheTTL time.Duration `yaml:"cache_ttl"`
 }
 
 // Tenant scopes stored data. Single-tenant installs declare exactly one and
@@ -59,9 +90,13 @@ type Tenant struct {
 }
 
 // Feeder is a source of report bytes. Feeders are interchangeable: each yields
-// opaque bytes plus a hint, and nothing below this layer knows how a report
+// opaque bytes plus a locator, and nothing below this layer knows how a report
 // arrived.
 type Feeder struct {
+	// Name identifies the feeder in logs, metrics, and its stored cursor. It
+	// must stay stable across restarts: changing it makes the feeder rescan the
+	// mailbox from the beginning.
+	Name   string `yaml:"name"`
 	Type   string `yaml:"type"` // imap
 	Tenant string `yaml:"tenant"`
 
@@ -72,6 +107,7 @@ type Feeder struct {
 	PasswordEnv string        `yaml:"password_env"`
 	Mailbox     string        `yaml:"mailbox"`
 	Interval    time.Duration `yaml:"interval"`
+	Insecure    bool          `yaml:"insecure"`
 }
 
 // Password resolves the feeder credential from the environment. Credentials are
@@ -91,7 +127,11 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
+	return Parse(data)
+}
 
+// Parse defaults and validates configuration bytes.
+func Parse(data []byte) (*Config, error) {
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
@@ -129,11 +169,26 @@ func (c *Config) applyDefaults() {
 	if c.Storage.Retention.Forensic == 0 {
 		c.Storage.Retention.Forensic = 30 * 24 * time.Hour
 	}
+	if c.Storage.SweepInterval == 0 {
+		c.Storage.SweepInterval = 6 * time.Hour
+	}
+	if c.Metrics.Window == 0 {
+		c.Metrics.Window = 30 * 24 * time.Hour
+	}
+	if c.Metrics.RefreshInterval == 0 {
+		c.Metrics.RefreshInterval = time.Minute
+	}
+	if c.Classification.CacheTTL == 0 {
+		c.Classification.CacheTTL = 15 * time.Minute
+	}
 
 	for i := range c.Feeders {
 		f := &c.Feeders[i]
 		if f.Tenant == "" && len(c.Tenants) == 1 {
 			f.Tenant = c.Tenants[0].ID
+		}
+		if f.Name == "" {
+			f.Name = fmt.Sprintf("%s-%d", f.Type, i)
 		}
 		if f.Type == "imap" {
 			if f.Port == 0 {
@@ -178,6 +233,7 @@ func (c *Config) validate() error {
 		}
 	}
 
+	names := make(map[string]bool, len(c.Feeders))
 	for i, f := range c.Feeders {
 		if f.Tenant == "" {
 			return fmt.Errorf("feeders[%d]: tenant is required when more than one tenant is declared", i)
@@ -185,6 +241,13 @@ func (c *Config) validate() error {
 		if !seen[f.Tenant] {
 			return fmt.Errorf("feeders[%d]: unknown tenant %q", i, f.Tenant)
 		}
+		// Two feeders sharing a name would share a cursor and silently skip
+		// each other's messages.
+		if names[f.Name] {
+			return fmt.Errorf("feeders[%d]: duplicate name %q", i, f.Name)
+		}
+		names[f.Name] = true
+
 		switch f.Type {
 		case "imap":
 			if f.Host == "" {

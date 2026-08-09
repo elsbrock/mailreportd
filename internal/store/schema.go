@@ -89,6 +89,18 @@ CREATE TABLE tlsrpt_policy (
 CREATE INDEX idx_tlsrpt_window ON tlsrpt_policy (tenant_id, end_at, domain);
 CREATE INDEX idx_tlsrpt_report ON tlsrpt_policy (report_id);
 
+-- Feeders track their own position rather than flagging or moving messages.
+-- The mailbox may be shared with a human and with other tools, so mutating it
+-- would be a side effect the operator never asked for.
+CREATE TABLE feeder_cursor (
+	tenant_id    TEXT    NOT NULL,
+	feeder       TEXT    NOT NULL,
+	uid_validity INTEGER NOT NULL DEFAULT 0,
+	last_uid     INTEGER NOT NULL DEFAULT 0,
+	updated_at   INTEGER NOT NULL,
+	PRIMARY KEY (tenant_id, feeder)
+);
+
 CREATE TABLE ingest_usage (
 	tenant_id  TEXT    NOT NULL,
 	day        TEXT    NOT NULL,
