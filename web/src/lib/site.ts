@@ -13,8 +13,7 @@ export const site = {
 	name: 'mailreportd',
 	version: '0.1.0',
 	url: siteUrl,
-	/** Per-locale social card, so a shared German link previews in German. */
-	ogImage: { en: `${siteUrl}/og.png`, de: `${siteUrl}/og.de.png` },
+	ogImage: `${siteUrl}/og.png`,
 	links: {
 		spec: '/docs/specs/report-ingest.md',
 		readme: '/README.md'

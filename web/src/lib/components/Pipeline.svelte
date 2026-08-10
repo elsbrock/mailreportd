@@ -1,11 +1,5 @@
 <script lang="ts">
-	import type { Messages } from '$lib/i18n';
-
-	interface Props {
-		t: Messages['cardinality']['pipeline'];
-	}
-
-	let { t }: Props = $props();
+	const caption = 'From mailbox to metrics';
 
 	// One row of the happy path, with two things hanging off it: quarantine,
 	// which is where failures are kept rather than dropped, and the JSON API,
@@ -15,15 +9,13 @@
 	const boxH = 62;
 	const row = 104;
 
-	// Derived, so switching locale re-labels the diagram rather than freezing the
-	// labels captured at first render.
-	const stages = $derived([
-		{ x: 8, label: t.mailbox, note: t.mailboxNote },
-		{ x: 8 + step, label: t.decode, note: t.decodeNote },
-		{ x: 8 + step * 2, label: t.parse, note: t.parseNote },
-		{ x: 8 + step * 3, label: t.store, note: t.storeNote },
-		{ x: 8 + step * 4, label: t.classify, note: t.classifyNote }
-	]);
+	const stages = [
+		{ x: 8, label: 'Mailbox', note: 'IMAP, read-only' },
+		{ x: 8 + step, label: 'Decode', note: 'MIME, gzip, zip' },
+		{ x: 8 + step * 2, label: 'Parse', note: 'RFC 7489 / 8460' },
+		{ x: 8 + step * 3, label: 'Store', note: 'SQLite, full detail' },
+		{ x: 8 + step * 4, label: 'Classify', note: 'against your SPF' }
+	];
 
 	const parseX = 8 + step * 2;
 	const storeX = 8 + step * 3;
@@ -39,10 +31,10 @@
 			role="img"
 			aria-labelledby="pipeline-title pipeline-desc"
 		>
-			<title id="pipeline-title">{t.caption}</title>
+			<title id="pipeline-title">{caption}</title>
 			<desc id="pipeline-desc">
-				{t.mailbox} → {t.decode} → {t.parse} → {t.store} → {t.classify} → {t.metrics}. {t.parse}
-				→ {t.quarantine}. {t.store} → {t.api}.
+				Mailbox → Decode → Parse → Store → Classify → Metrics. Parse → Quarantine. Store → JSON
+				API.
 			</desc>
 
 			<defs>
@@ -128,14 +120,14 @@
 					text-anchor="middle"
 					fill="var(--color-ink)"
 					font-size="14"
-					font-weight="600">{t.metrics}</text
+					font-weight="600">Metrics</text
 				>
 				<text
 					x={outX + boxW / 2}
 					y={row - boxH / 2 + 38}
 					text-anchor="middle"
 					fill="var(--color-ink-muted)"
-					font-size="11">{t.metricsNote}</text
+					font-size="11">bounded series</text
 				>
 			</g>
 
@@ -170,14 +162,14 @@
 					text-anchor="middle"
 					fill="var(--color-ink)"
 					font-size="14"
-					font-weight="600">{t.quarantine}</text
+					font-weight="600">Quarantine</text
 				>
 				<text
 					x={parseX + boxW / 2}
 					y={lowerRow + 44}
 					text-anchor="middle"
 					fill="var(--color-ink-muted)"
-					font-size="11">{t.quarantineNote}</text
+					font-size="11">kept, never deleted</text
 				>
 			</g>
 
@@ -199,17 +191,17 @@
 					text-anchor="middle"
 					fill="var(--color-ink)"
 					font-size="14"
-					font-weight="600">{t.api}</text
+					font-weight="600">JSON API</text
 				>
 				<text
 					x={outX + boxW / 2}
 					y={lowerRow + 44}
 					text-anchor="middle"
 					fill="var(--color-ink-faint)"
-					font-size="11">{t.apiNote}</text
+					font-size="11">per-source detail</text
 				>
 			</g>
 		</svg>
 	</div>
-	<figcaption class="mt-3 text-center text-sm text-ink-faint">{t.caption}</figcaption>
+	<figcaption class="mt-3 text-center text-sm text-ink-faint">{caption}</figcaption>
 </figure>
