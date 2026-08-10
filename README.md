@@ -40,6 +40,11 @@ nothing else — no MTA API, no provider API, no privileged access.
   told apart. An empty `p=` is a revocation, not a typo, and needs a different
   fix from a selector that was never published. Selectors must be listed in
   config: DNS offers no way to enumerate names under `_domainkey`.
+
+  Do not alert on `revoked`. The rotation BCP has operators pre-publish blank
+  selector slots, so a healthy domain shows them routinely — Fastmail keeps two
+  of `fm1`/`fm2`/`fm3` empty while the third signs. Alert on `missing`,
+  `malformed` and `weak`.
 - **DMARC record** (RFC 7489) — the published policy, the resolved subdomain
   policy, and `pct=`. Below 100 reads as enforcement while enforcing on a
   sample.
