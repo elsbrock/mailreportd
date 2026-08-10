@@ -276,7 +276,7 @@
 				{site.name}
 			</a>
 
-			<nav class="ml-auto hidden items-center gap-6 md:flex" aria-label="Capabilities">
+			<nav class="ml-auto hidden items-center gap-6 md:flex" aria-label="Sections">
 				{#each navLinks as link (link.href)}
 					<a href={link.href} class="text-sm text-ink-muted transition-colors hover:text-ink">
 						{link.label}
@@ -420,7 +420,12 @@
 				</div>
 
 				<div class="mt-12 overflow-hidden rounded-card border border-line bg-surface">
-					<div class="scroll-x">
+					<!-- Focusable, because on a narrow viewport this is the only way to
+					     reach the right-hand columns without a pointer (WCAG 2.1.1). The
+					     lint rule objects to tabindex on a non-interactive element; the
+					     success criterion wins. -->
+					<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+					<div class="scroll-x" tabindex="0" role="region" aria-label="Supported standards and capabilities">
 						<table class="w-full min-w-[44rem] border-collapse text-left text-sm">
 							<caption class="sr-only">Supported standards and capabilities</caption>
 							<thead>
@@ -556,7 +561,8 @@
 				</div>
 
 				<div class="mt-12 overflow-hidden rounded-card border border-line bg-surface">
-					<div class="scroll-x">
+					<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+					<div class="scroll-x" tabindex="0" role="region" aria-label="Exported metric families">
 						<table class="w-full min-w-[36rem] border-collapse text-left text-sm">
 							<caption class="sr-only">Exported metric families</caption>
 							<thead>
@@ -588,7 +594,7 @@
 									alert.severity
 								]}"
 							>
-								{alert.severity}
+								<span class="sr-only">Severity:&nbsp;</span>{alert.severity}
 							</span>
 							<h4 class="mt-3 text-sm font-semibold text-ink">{alert.title}</h4>
 							<p class="mt-2 text-sm leading-relaxed text-ink-muted">{alert.body}</p>

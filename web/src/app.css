@@ -18,17 +18,24 @@
 	--color-line: oklch(90% 0.008 250);
 	--color-line-strong: oklch(82% 0.012 250);
 
+	/*
+	 * The lightness of every foreground token is set by contrast against the
+	 * lightest surface it is allowed to sit on, not by eye. In light mode that
+	 * binds ink-faint to 4.77:1 on surface-sunken and the pass/warn chips to
+	 * ~4.5:1 on their own soft backgrounds, so the amber reads darker than a
+	 * pure signal colour would. That is the cost of putting small text on it.
+	 */
 	--color-ink: oklch(24% 0.02 255);
 	--color-ink-muted: oklch(48% 0.016 255);
-	--color-ink-faint: oklch(62% 0.014 255);
+	--color-ink-faint: oklch(53% 0.014 255);
 
 	--color-accent: oklch(52% 0.13 210);
 	--color-accent-strong: oklch(44% 0.14 210);
 	--color-accent-soft: oklch(95% 0.03 210);
 
-	--color-pass: oklch(58% 0.13 155);
+	--color-pass: oklch(52% 0.13 155);
 	--color-pass-soft: oklch(95% 0.04 155);
-	--color-warn: oklch(65% 0.14 75);
+	--color-warn: oklch(53% 0.14 75);
 	--color-warn-soft: oklch(95% 0.05 75);
 	--color-fail: oklch(56% 0.17 25);
 	--color-fail-soft: oklch(95% 0.04 25);
@@ -50,7 +57,7 @@
 
 		--color-ink: oklch(95% 0.008 250);
 		--color-ink-muted: oklch(74% 0.014 250);
-		--color-ink-faint: oklch(60% 0.015 250);
+		--color-ink-faint: oklch(61% 0.015 250);
 
 		--color-accent: oklch(76% 0.12 205);
 		--color-accent-strong: oklch(84% 0.11 205);
@@ -74,7 +81,7 @@
 
 	--color-ink: oklch(95% 0.008 250);
 	--color-ink-muted: oklch(74% 0.014 250);
-	--color-ink-faint: oklch(60% 0.015 250);
+	--color-ink-faint: oklch(61% 0.015 250);
 
 	--color-accent: oklch(76% 0.12 205);
 	--color-accent-strong: oklch(84% 0.11 205);

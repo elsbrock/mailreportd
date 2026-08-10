@@ -24,7 +24,13 @@
 </script>
 
 <figure class="not-prose">
-	<div class="scroll-x rounded-card border border-line bg-surface p-4 sm:p-6">
+	<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+	<div
+		class="scroll-x rounded-card border border-line bg-surface p-4 sm:p-6"
+		tabindex="0"
+		role="region"
+		aria-label={caption}
+	>
 		<svg
 			viewBox="0 56 960 236"
 			class="h-auto w-full min-w-[46rem]"

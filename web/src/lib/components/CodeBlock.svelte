@@ -26,8 +26,10 @@
 		</figcaption>
 	{/if}
 	<!-- Wide code scrolls inside its own box so the page body never scrolls
-	     horizontally on a phone. -->
-	<div class="scroll-x">
+	     horizontally on a phone, and takes focus so a keyboard can scroll it
+	     (WCAG 2.1.1), which is what the lint rule below is objecting to. -->
+	<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+	<div class="scroll-x" tabindex="0">
 		<pre
 			class="px-4 py-4 font-mono text-[0.8125rem] leading-relaxed text-ink"
 			aria-label={label}><code>{code}</code></pre>
