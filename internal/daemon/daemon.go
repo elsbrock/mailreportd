@@ -25,14 +25,18 @@ import (
 	"github.com/elsbrock/mailreportd/internal/config"
 	"github.com/elsbrock/mailreportd/internal/feeder"
 	"github.com/elsbrock/mailreportd/internal/metrics"
+	"github.com/elsbrock/mailreportd/internal/policy"
 	"github.com/elsbrock/mailreportd/internal/store"
 )
 
 // Options are injection points for tests. Every field is optional and the zero
 // value is what production uses.
 type Options struct {
-	// Resolver overrides DNS for SPF expansion.
+	// Resolver overrides DNS for SPF expansion and the policy checks.
 	Resolver classify.Resolver
+	// HTTPClient overrides the client used to fetch MTA-STS policies, which is
+	// the only outbound request in the daemon that is not DNS.
+	HTTPClient *http.Client
 	// Version is reported in build info.
 	Version string
 }
@@ -77,7 +81,16 @@ func New(cfg *config.Config, log *slog.Logger, opts Options) (*Daemon, error) {
 	}
 	classifier := classify.New(opts.Resolver, cfg.Classification.CacheTTL, overrides)
 
-	collector := metrics.NewCollector(tenants, classifier, cfg.Metrics.Window, log)
+	// The checker shares the injected resolver with the classifier, so one fake
+	// drives both in tests. classify.Resolver is a superset of what the policy
+	// checks need, and a nil value stays nil through the conversion.
+	var policyResolver policy.Resolver
+	if opts.Resolver != nil {
+		policyResolver = opts.Resolver
+	}
+	checker := policy.New(policyResolver, opts.HTTPClient, cfg.Policy.CacheTTL, cfg.Policy.Selectors)
+
+	collector := metrics.NewCollector(tenants, classifier, checker, cfg.Metrics.Window, log)
 	registry := prometheus.NewRegistry()
 	registry.MustRegister(
 		collectors.NewGoCollector(),

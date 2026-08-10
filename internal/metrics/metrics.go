@@ -17,6 +17,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/elsbrock/mailreportd/internal/classify"
+	"github.com/elsbrock/mailreportd/internal/policy"
 	"github.com/elsbrock/mailreportd/internal/store"
 )
 
@@ -71,6 +72,90 @@ var (
 		namespace+"_spf_resolvable",
 		"1 when the domain's SPF record could be resolved.",
 		[]string{"tenant", "domain"}, nil)
+
+	// Published-policy series. These describe what the domain publishes, which
+	// is a different observation from what reporters saw when they evaluated
+	// our mail -- see descPolicy above, which carries the latter. The
+	// divergence between the two is itself a signal, so the names must not be
+	// conflated.
+	//
+	// A check that could not complete emits no verdict at all. The series goes
+	// stale and the error counter moves instead, because a DNS timeout is not
+	// a missing record and the two must not share a value.
+	descDKIMState = prometheus.NewDesc(
+		namespace+"_dkim_record_state",
+		"Published DKIM selector state as a label set with value 1: missing, revoked, malformed, weak or ok.",
+		[]string{"tenant", "domain", "selector", "state"}, nil)
+
+	descDKIMKeyBits = prometheus.NewDesc(
+		namespace+"_dkim_key_bits",
+		"RSA modulus size of the published DKIM key. Receivers reject keys below 1024 bits.",
+		[]string{"tenant", "domain", "selector"}, nil)
+
+	descDKIMTesting = prometheus.NewDesc(
+		namespace+"_dkim_record_testing",
+		"1 when the selector publishes t=y, which asks receivers to treat a failure as unsigned.",
+		[]string{"tenant", "domain", "selector"}, nil)
+
+	descDMARCRecordValid = prometheus.NewDesc(
+		namespace+"_dmarc_record_valid",
+		"1 when the domain publishes a parseable DMARC record.",
+		[]string{"tenant", "domain"}, nil)
+
+	descDMARCRecordPolicy = prometheus.NewDesc(
+		namespace+"_dmarc_record_policy",
+		"Currently published DMARC policy, as a label set with value 1. sp is resolved, so it reflects the policy that actually applies to subdomains.",
+		[]string{"tenant", "domain", "p", "sp"}, nil)
+
+	// Below 100 enforces on a sample while reading as full enforcement, which
+	// is the most common way a domain believes it is at p=reject when most of
+	// its mail is not.
+	descDMARCRecordPct = prometheus.NewDesc(
+		namespace+"_dmarc_record_pct",
+		"Published DMARC pct=, defaulting to 100.",
+		[]string{"tenant", "domain"}, nil)
+
+	// Without the RFC 7489 §7.1 record most large receivers send nothing at
+	// all, which presents as an empty mailbox rather than as an error.
+	descDMARCRUAAuthorized = prometheus.NewDesc(
+		namespace+"_dmarc_rua_authorized",
+		"1 when an external rua destination publishes the RFC 7489 §7.1 authorization record.",
+		[]string{"tenant", "domain", "rua_domain"}, nil)
+
+	descMTASTSValid = prometheus.NewDesc(
+		namespace+"_mtasts_record_valid",
+		"1 when the domain publishes a parseable MTA-STS policy reachable over HTTPS.",
+		[]string{"tenant", "domain"}, nil)
+
+	descMTASTSPolicy = prometheus.NewDesc(
+		namespace+"_mtasts_policy",
+		"Published MTA-STS mode as a label set with value 1. testing generates reports and enforces nothing.",
+		[]string{"tenant", "domain", "mode"}, nil)
+
+	descMTASTSMXCovered = prometheus.NewDesc(
+		namespace+"_mtasts_mx_covered",
+		"1 when every live MX host matches an mx: pattern in the policy. Drift makes enforcing senders refuse delivery.",
+		[]string{"tenant", "domain"}, nil)
+
+	descMTASTSMaxAge = prometheus.NewDesc(
+		namespace+"_mtasts_max_age_seconds",
+		"Published MTA-STS max_age, which is how long senders cache the policy.",
+		[]string{"tenant", "domain"}, nil)
+
+	descMTASTSStaleID = prometheus.NewDesc(
+		namespace+"_mtasts_stale_id",
+		"1 when the policy body changed while its id did not, so senders keep the old policy until max_age expires.",
+		[]string{"tenant", "domain"}, nil)
+
+	descPolicyChecked = prometheus.NewDesc(
+		namespace+"_policy_check_timestamp_seconds",
+		"Unix timestamp of the last completed policy check for the domain.",
+		[]string{"tenant", "domain"}, nil)
+
+	descPolicyErrors = prometheus.NewDesc(
+		namespace+"_policy_check_errors_total",
+		"Checks that could not be completed, which is not the same as a check that failed.",
+		[]string{"tenant", "domain", "check"}, nil)
 
 	descRefresh = prometheus.NewDesc(
 		namespace+"_refresh_timestamp_seconds",
@@ -128,6 +213,7 @@ type Tenant struct {
 type Collector struct {
 	tenants    []Tenant
 	classifier *classify.Classifier
+	checker    *policy.Checker
 	window     time.Duration
 	log        *slog.Logger
 
@@ -138,7 +224,9 @@ type Collector struct {
 // NewCollector returns a collector over the given tenants. A zero window
 // defaults to thirty days, which comfortably spans the reporting lag of every
 // large receiver.
-func NewCollector(tenants []Tenant, classifier *classify.Classifier, window time.Duration, log *slog.Logger) *Collector {
+// A nil checker disables the published-policy series entirely, which is what
+// tests that care only about report aggregation pass.
+func NewCollector(tenants []Tenant, classifier *classify.Classifier, checker *policy.Checker, window time.Duration, log *slog.Logger) *Collector {
 	if window <= 0 {
 		window = 30 * 24 * time.Hour
 	}
@@ -148,6 +236,7 @@ func NewCollector(tenants []Tenant, classifier *classify.Classifier, window time
 	return &Collector{
 		tenants:    tenants,
 		classifier: classifier,
+		checker:    checker,
 		window:     window,
 		log:        log,
 	}
@@ -192,6 +281,7 @@ func (c *Collector) Refresh(ctx context.Context) {
 		c.collectTLS(ctx, tenant, since, add)
 		c.collectIngestState(ctx, tenant, add)
 		c.collectSPF(ctx, tenant, add)
+		c.collectPolicy(ctx, tenant, add)
 	}
 
 	add(descRefresh, prometheus.GaugeValue, float64(started.Unix()))
@@ -309,6 +399,99 @@ func (c *Collector) collectSPF(ctx context.Context, tenant Tenant, add addFunc) 
 		}
 		add(descSPFExceeded, prometheus.GaugeValue, exceeded, tenant.ID, domain)
 	}
+}
+
+// collectPolicy exports what each domain publishes.
+//
+// The governing rule is that a check which could not complete emits nothing.
+// Where the report-derived series distinguish "no data" from "healthy" by
+// their absence, these distinguish "we could not tell" from "it is broken" the
+// same way: the verdict series goes stale and only the error counter moves.
+// Emitting a zero on a DNS timeout would page someone about a policy that is
+// very likely fine.
+func (c *Collector) collectPolicy(ctx context.Context, tenant Tenant, add addFunc) {
+	if c.checker == nil {
+		return
+	}
+
+	owned := make(map[string]bool, len(tenant.Domains))
+	for _, domain := range tenant.Domains {
+		owned[domain] = true
+		res := c.checker.Check(ctx, domain)
+
+		add(descPolicyChecked, prometheus.GaugeValue, float64(res.CheckedAt.Unix()), tenant.ID, domain)
+
+		for _, d := range res.DKIM {
+			if d.Err != nil {
+				continue
+			}
+			add(descDKIMState, prometheus.GaugeValue, 1, tenant.ID, domain, d.Selector, dkimState(d))
+			add(descDKIMTesting, prometheus.GaugeValue, boolValue(d.Testing), tenant.ID, domain, d.Selector)
+			if d.KeyBits > 0 {
+				add(descDKIMKeyBits, prometheus.GaugeValue, float64(d.KeyBits), tenant.ID, domain, d.Selector)
+			}
+		}
+
+		if res.DMARC.Err == nil {
+			add(descDMARCRecordValid, prometheus.GaugeValue, boolValue(res.DMARC.Valid), tenant.ID, domain)
+			if res.DMARC.Valid {
+				add(descDMARCRecordPolicy, prometheus.GaugeValue, 1,
+					tenant.ID, domain, res.DMARC.Policy, res.DMARC.SubdomainPolicy)
+				add(descDMARCRecordPct, prometheus.GaugeValue, float64(res.DMARC.Pct), tenant.ID, domain)
+			}
+			for ruaDomain, authorized := range res.DMARC.RUAAuthorized {
+				add(descDMARCRUAAuthorized, prometheus.GaugeValue, boolValue(authorized),
+					tenant.ID, domain, ruaDomain)
+			}
+		}
+
+		if res.MTASTS.Err == nil {
+			add(descMTASTSValid, prometheus.GaugeValue, boolValue(res.MTASTS.Valid), tenant.ID, domain)
+			if res.MTASTS.Valid {
+				add(descMTASTSPolicy, prometheus.GaugeValue, 1, tenant.ID, domain, res.MTASTS.Mode)
+				add(descMTASTSMaxAge, prometheus.GaugeValue, float64(res.MTASTS.MaxAge), tenant.ID, domain)
+				add(descMTASTSMXCovered, prometheus.GaugeValue, boolValue(res.MTASTS.MXCovered), tenant.ID, domain)
+				add(descMTASTSStaleID, prometheus.GaugeValue, boolValue(res.MTASTS.StaleID), tenant.ID, domain)
+			}
+		}
+	}
+
+	// Error counts are cumulative and owned by the checker, because results are
+	// cached: counting them here would re-count the same failure on every
+	// refresh for as long as the cache holds it.
+	for _, e := range c.checker.ErrorCounts() {
+		if !owned[e.Domain] {
+			continue
+		}
+		add(descPolicyErrors, prometheus.CounterValue, float64(e.Count), tenant.ID, e.Domain, e.Check)
+	}
+}
+
+// dkimState collapses one selector into a single bounded label.
+//
+// The states are ordered by what the operator has to do about them: a missing
+// record was never published, a revoked one was published and withdrawn, and
+// those have different fixes.
+func dkimState(d policy.DKIMResult) string {
+	switch {
+	case !d.Found:
+		return "missing"
+	case d.Revoked:
+		return "revoked"
+	case d.KeyBits == 0:
+		return "malformed"
+	case !d.Valid:
+		return "weak"
+	default:
+		return "ok"
+	}
+}
+
+func boolValue(b bool) float64 {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // Register adds the collector and the ingest counters to a registry.

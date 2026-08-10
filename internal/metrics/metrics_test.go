@@ -16,6 +16,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/elsbrock/mailreportd/internal/classify"
+	"github.com/elsbrock/mailreportd/internal/policy"
 	"github.com/elsbrock/mailreportd/internal/store"
 )
 
@@ -99,6 +100,7 @@ func setup(t *testing.T) (*Collector, *prometheus.Registry) {
 	c := NewCollector(
 		[]Tenant{{ID: "default", Store: s, Domains: []string{"example.org"}}},
 		classify.New(resolver, time.Minute, nil),
+		nil, // these tests cover report aggregation, not published policy
 		30*24*time.Hour,
 		nil,
 	)
@@ -239,6 +241,7 @@ func TestCollectorSurvivesUnresolvableSPF(t *testing.T) {
 	c := NewCollector(
 		[]Tenant{{ID: "default", Store: s, Domains: []string{"example.org"}}},
 		classify.New(&fakeResolver{txt: map[string][]string{}}, time.Minute, nil),
+		nil, // as above: no policy checker in this fixture
 		30*24*time.Hour, nil,
 	)
 	c.Refresh(context.Background())
@@ -261,5 +264,114 @@ mailreport_spf_resolvable{domain="example.org",tenant="default"} 0
 `
 	if err := testutil.GatherAndCompare(reg, strings.NewReader(expected), "mailreport_spf_resolvable"); err != nil {
 		t.Error(err)
+	}
+}
+
+// policyResolver answers absent names with a real NXDOMAIN. The published-policy
+// checks depend on that distinction: "no such record" is a verdict about the
+// domain, while any other resolver error means the check could not be made.
+type policyResolver struct {
+	txt map[string][]string
+	err map[string]error
+}
+
+func (p *policyResolver) LookupTXT(_ context.Context, name string) ([]string, error) {
+	name = strings.TrimSuffix(name, ".")
+	if err, ok := p.err[name]; ok {
+		return nil, err
+	}
+	if r, ok := p.txt[name]; ok {
+		return r, nil
+	}
+	return nil, &net.DNSError{Err: "no such host", Name: name, IsNotFound: true}
+}
+
+func (p *policyResolver) LookupIP(context.Context, string, string) ([]net.IP, error) {
+	return nil, &net.DNSError{Err: "no such host", IsNotFound: true}
+}
+
+func (p *policyResolver) LookupMX(_ context.Context, name string) ([]*net.MX, error) {
+	return nil, &net.DNSError{Err: "no such host", Name: name, IsNotFound: true}
+}
+
+func policyCollector(t *testing.T, resolver *policyResolver, selectors map[string][]string) *prometheus.Registry {
+	t.Helper()
+
+	db, err := store.Open(filepath.Join(t.TempDir(), "p.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	c := NewCollector(
+		[]Tenant{{ID: "default", Store: db.Tenant("default"), Domains: []string{"example.org"}}},
+		classify.New(resolver, time.Minute, nil),
+		policy.New(resolver, nil, time.Minute, selectors),
+		30*24*time.Hour, nil,
+	)
+	c.Refresh(context.Background())
+
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(c)
+	return reg
+}
+
+func TestPolicyMetricsExported(t *testing.T) {
+	reg := policyCollector(t, &policyResolver{txt: map[string][]string{
+		"_dmarc.example.org":         {"v=DMARC1; p=reject; pct=100; rua=mailto:d@example.org"},
+		"sel._domainkey.example.org": {"v=DKIM1; k=rsa; p="},
+	}}, map[string][]string{"example.org": {"sel"}})
+
+	for _, name := range []string{
+		"mailreport_dmarc_record_valid",
+		"mailreport_dmarc_record_policy",
+		"mailreport_dmarc_record_pct",
+		"mailreport_dkim_record_state",
+		"mailreport_policy_check_timestamp_seconds",
+	} {
+		count, err := testutil.GatherAndCount(reg, name)
+		if err != nil {
+			t.Fatalf("gather %s: %v", name, err)
+		}
+		if count == 0 {
+			t.Errorf("%s: no series exported", name)
+		}
+	}
+
+	// The selector is published but revoked, which must not read as missing.
+	expected := `
+# HELP mailreport_dkim_record_state Published DKIM selector state as a label set with value 1: missing, revoked, malformed, weak or ok.
+# TYPE mailreport_dkim_record_state gauge
+mailreport_dkim_record_state{domain="example.org",selector="sel",state="revoked",tenant="default"} 1
+`
+	if err := testutil.GatherAndCompare(reg, strings.NewReader(expected), "mailreport_dkim_record_state"); err != nil {
+		t.Error(err)
+	}
+}
+
+// A check that could not complete must leave the verdict series absent rather
+// than exporting a zero. A zero here would page someone about a policy that is
+// most likely fine, on the strength of a resolver hiccup.
+func TestIncompletePolicyCheckEmitsNoVerdict(t *testing.T) {
+	reg := policyCollector(t, &policyResolver{
+		err: map[string]error{
+			"_dmarc.example.org": &net.DNSError{Err: "server misbehaving", IsTemporary: true},
+		},
+	}, nil)
+
+	count, err := testutil.GatherAndCount(reg, "mailreport_dmarc_record_valid")
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("mailreport_dmarc_record_valid: %d series, want none for an incomplete check", count)
+	}
+
+	count, err = testutil.GatherAndCount(reg, "mailreport_policy_check_errors_total")
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("mailreport_policy_check_errors_total: %d series, want 1", count)
 	}
 }

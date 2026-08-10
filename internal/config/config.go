@@ -21,6 +21,7 @@ type Config struct {
 	Storage        Storage        `yaml:"storage"`
 	Metrics        Metrics        `yaml:"metrics"`
 	Classification Classification `yaml:"classification"`
+	Policy         Policy         `yaml:"policy"`
 	Tenants        []Tenant       `yaml:"tenants"`
 	Feeders        []Feeder       `yaml:"feeders"`
 }
@@ -80,6 +81,26 @@ type Classification struct {
 	TrustedSources []string `yaml:"trusted_sources"`
 	// CacheTTL is how long an SPF expansion is reused.
 	CacheTTL time.Duration `yaml:"cache_ttl"`
+}
+
+// Policy controls the published-policy checks: what a domain publishes, as
+// opposed to what receivers report about it.
+//
+// There is no enable flag, for the same reason the SPF lookup budget has none.
+// The DMARC and MTA-STS checks need no configuration at all, cost two DNS
+// lookups per domain per cache period, and answer in seconds what reports
+// answer in a day. Only DKIM has to be told anything.
+type Policy struct {
+	// CacheTTL is how long a check result is reused. Zero defaults to fifteen
+	// minutes, matching the SPF classifier.
+	CacheTTL time.Duration `yaml:"cache_ttl"`
+	// Selectors names the DKIM selectors to check, per domain.
+	//
+	// This is the one thing the daemon cannot derive: DNS offers no way to
+	// enumerate the names published under _domainkey, so an unlisted selector
+	// is invisible. A domain with no selectors is still checked for DMARC and
+	// MTA-STS; it simply exports no DKIM series.
+	Selectors map[string][]string `yaml:"selectors"`
 }
 
 // Tenant scopes stored data. Single-tenant installs declare exactly one and
@@ -198,6 +219,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Classification.CacheTTL == 0 {
 		c.Classification.CacheTTL = 15 * time.Minute
+	}
+	if c.Policy.CacheTTL == 0 {
+		c.Policy.CacheTTL = 15 * time.Minute
 	}
 
 	for i := range c.Feeders {
