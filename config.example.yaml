@@ -23,6 +23,17 @@ storage:
     # Failure reports contain recipient addresses and message content.
     forensic: 720h
 
+policy:
+  # How long a published-policy check result is reused.
+  cache_ttl: 15m
+  # DKIM selectors to check, per domain. This is the one thing the daemon cannot
+  # derive: DNS offers no way to enumerate the names published under
+  # _domainkey, so an unlisted selector is invisible. Domains omitted here are
+  # still checked for DMARC and MTA-STS.
+  selectors:
+    example.org:
+      - default
+
 tenants:
   - id: default
     domains:
