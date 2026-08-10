@@ -15,6 +15,7 @@ export const de: Messages = {
 	nav: {
 		skipToContent: 'Zum Inhalt springen',
 		capabilities: 'Funktionen',
+		matrix: 'Funktionsmatrix',
 		cardinality: 'Kardinalität',
 		metrics: 'Metriken',
 		start: 'Schnellstart',
@@ -76,6 +77,129 @@ export const de: Messages = {
 				tag: 'Zehn-Lookup-Grenze',
 				title: 'Zustand des SPF-Eintrags',
 				body: 'Dieselbe Auflösung zählt mit, wie viele DNS-Lookups Ihr Eintrag verbraucht. Über zehn ist es bei echten Empfängern ein permanenter Fehler — ein akuter Zustellbarkeitsdefekt, gemeldet als Metrik statt entdeckt im Störfall.'
+			}
+		]
+	},
+	matrix: {
+		heading: 'Funktionsmatrix',
+		lede: 'Zwei Arten von Signalen. Berichte zeigen, was Empfänger gestern mit Ihrer Mail gemacht haben; die Richtlinienprüfung zeigt, was gerade in Ihrem DNS steht. Das eine ersetzt das andere nicht.',
+		tableCaption: 'Unterstützte Standards und Funktionen',
+		columns: { feature: 'Funktion', standard: 'Standard', status: 'Status' },
+		status: {
+			supported: 'Unterstützt',
+			planned: 'Geplant',
+			declined: 'Nicht geplant'
+		},
+		declinedNote:
+			'„Nicht geplant“ heißt: bewusst dagegen entschieden, nicht vergessen. Jeder Eintrag nennt den Grund — eine Matrix, die nur Häkchen zeigt, verschweigt genau das, was Sie wissen wollen.',
+		groups: [
+			{
+				name: 'Berichte einlesen',
+				note: 'Was Empfänger zurückmelden, Stunden bis Tage später.',
+				items: [
+					{
+						name: 'DMARC-Aggregatberichte',
+						standard: 'RFC 7489',
+						status: 'supported',
+						note: 'Authentifizierungsergebnisse je Quelle — und gutmütig gegenüber allem, was echte Reporter am Schema vorbei verschicken.'
+					},
+					{
+						name: 'SMTP-TLS-Berichte per Mail',
+						standard: 'RFC 8460',
+						status: 'supported',
+						note: 'Sitzungen und Fehler nach Ergebnistyp, samt der Frage, ob STS oder DANE gegriffen hat.'
+					},
+					{
+						name: 'SMTP-TLS-Berichte per HTTPS',
+						standard: 'RFC 8460',
+						status: 'planned',
+						note: 'Manche Empfänger liefern an einen Endpunkt statt in ein Postfach.'
+					},
+					{
+						name: 'DMARC-Fehlerberichte',
+						standard: 'RFC 6591',
+						status: 'planned',
+						note: 'Enthalten Empfängeradressen und Nachrichteninhalte. Dafür braucht es Verschlüsselung, kurze Aufbewahrung und ein Zugriffsprotokoll — vorher kommt das nicht rein.'
+					}
+				]
+			},
+			{
+				name: 'Was Sie selbst veröffentlichen',
+				note: 'Was gerade in Ihrem DNS steht, laufend geprüft.',
+				items: [
+					{
+						name: 'SPF-Eintrag und Lookup-Budget',
+						standard: 'RFC 7208',
+						status: 'supported',
+						note: 'Über zehn DNS-Lookups quittieren echte Empfänger mit permerror. SPF besteht dann nicht mehr teilweise, sondern gar nicht.'
+					},
+					{
+						name: 'DKIM-Selektoren und Schlüsselstärke',
+						standard: 'RFC 6376',
+						status: 'supported',
+						note: 'Fehlt, widerrufen, kaputt, zu schwach oder in Ordnung — sauber auseinandergehalten. Ein zurückgezogener Selektor und einer, den es nie gab, brauchen verschiedene Handgriffe.'
+					},
+					{
+						name: 'DMARC-Eintrag, pct und sp',
+						standard: 'RFC 7489',
+						status: 'supported',
+						note: 'Ein pct unter 100 sieht nach Durchsetzung aus, greift aber nur auf einer Stichprobe. Die Subdomain-Policy wird aufgelöst statt roh durchgereicht.'
+					},
+					{
+						name: 'Autorisierung externer rua-Ziele',
+						standard: 'RFC 7489 §7.1',
+						status: 'supported',
+						note: 'Fehlt sie, bekommt ein fremdes rua-Ziel gar nichts — und ein leeres Postfach sieht aus wie eine ruhige Woche.'
+					},
+					{
+						name: 'MTA-STS-Policy',
+						standard: 'RFC 8461',
+						status: 'supported',
+						note: 'Modus, max_age, ob die mx-Liste noch zu Ihren echten MX passt, und ob sich der Inhalt geändert hat, ohne dass die id hochgezählt wurde.'
+					},
+					{
+						name: 'DANE / TLSA',
+						standard: 'RFC 7672',
+						status: 'declined',
+						note: 'Ohne DNSSEC sinnlos, und ehrlich prüfen lässt es sich nur mit einem validierenden Resolver. Bloß zu melden, dass ein Eintrag da ist, wäre schlechter als gar nichts zu melden.'
+					},
+					{
+						name: 'BIMI',
+						standard: 'Entwurf',
+						status: 'declined',
+						note: 'Ohne Verified Mark Certificate bedeutungslos. Kosmetik, keine Zustellbarkeit.'
+					}
+				]
+			},
+			{
+				name: 'Rein und raus',
+				note: 'Wie Berichte hereinkommen und wie Signale herausgehen.',
+				items: [
+					{
+						name: 'IMAP-Postfach',
+						standard: 'Nur lesend',
+						status: 'supported',
+						note: 'Merkt sich die eigene Position im Postfach. Markiert nichts, verschiebt nichts, löscht nichts.'
+					},
+					{
+						name: 'Maildir',
+						standard: '—',
+						status: 'planned',
+						note: 'Für Installationen, die lokal zustellen, statt IMAP aufzumachen.'
+					},
+					{
+						name: 'Prometheus-Endpunkt',
+						standard: 'OpenMetrics',
+						status: 'supported',
+						note: 'Nur begrenzte Zeitreihen, und nur auf dem privaten Listener.'
+					},
+					{
+						name: 'JSON-Lese-API',
+						standard: '—',
+						status: 'supported',
+						note: 'Die Details je Quelle, die niemals zu Labels werden dürfen.'
+					}
+				]
 			}
 		]
 	},

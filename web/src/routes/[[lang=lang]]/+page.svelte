@@ -14,6 +14,7 @@
 
 	const navLinks = $derived([
 		{ href: '#capabilities', label: t.nav.capabilities },
+		{ href: '#matrix', label: t.nav.matrix },
 		{ href: '#cardinality', label: t.nav.cardinality },
 		{ href: '#metrics', label: t.nav.metrics },
 		{ href: '#start', label: t.nav.start }
@@ -23,6 +24,17 @@
 		warning: 'border-warn/40 bg-warn-soft text-warn',
 		never: 'border-line text-ink-faint'
 	};
+
+	const statusClass: Record<string, string> = {
+		supported: 'border-pass/40 bg-pass-soft text-pass',
+		planned: 'border-line-strong text-ink-muted',
+		declined: 'border-line text-ink-faint'
+	};
+
+	// The status keys are shared across locales; only the rendered label differs.
+	const statusLabel = $derived(
+		(status: string) => t.matrix.status[status as keyof typeof t.matrix.status] ?? status
+	);
 </script>
 
 <Seo {locale} path="/" />
@@ -176,6 +188,83 @@
 						</article>
 					{/each}
 				</div>
+			</div>
+		</section>
+
+		<!-- Feature matrix, including what is deliberately absent -->
+		<section id="matrix" class="scroll-mt-20 border-b border-line py-20 sm:py-24">
+			<div class="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
+				<div class="max-w-2xl">
+					<h2 class="text-3xl font-semibold tracking-tight text-ink sm:text-4xl">
+						{t.matrix.heading}
+					</h2>
+					<p class="mt-4 text-lg leading-relaxed text-ink-muted">{t.matrix.lede}</p>
+				</div>
+
+				<div class="mt-12 overflow-hidden rounded-card border border-line bg-surface">
+					<div class="scroll-x">
+						<table class="w-full min-w-[44rem] border-collapse text-left text-sm">
+							<caption class="sr-only">{t.matrix.tableCaption}</caption>
+							<thead>
+								<tr class="border-b border-line bg-surface-sunken">
+									<th scope="col" class="px-5 py-3 font-medium text-ink-muted">
+										{t.matrix.columns.feature}
+									</th>
+									<th scope="col" class="px-5 py-3 font-medium text-ink-muted">
+										{t.matrix.columns.standard}
+									</th>
+									<th scope="col" class="px-5 py-3 font-medium text-ink-muted">
+										{t.matrix.columns.status}
+									</th>
+								</tr>
+							</thead>
+							{#each t.matrix.groups as group (group.name)}
+								<tbody>
+									<tr class="border-b border-line bg-surface-sunken/60">
+										<th
+											scope="colgroup"
+											colspan="3"
+											class="px-5 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-ink"
+										>
+											{group.name}
+											<span class="ml-2 font-normal normal-case tracking-normal text-ink-faint">
+												{group.note}
+											</span>
+										</th>
+									</tr>
+									{#each group.items as item (item.name)}
+										<tr class="border-b border-line last:border-0">
+											<td class="px-5 py-3 align-top">
+												<span class="font-medium text-ink">{item.name}</span>
+												<span class="mt-1 block text-[0.8125rem] leading-relaxed text-ink-muted">
+													{item.note}
+												</span>
+											</td>
+											<td
+												class="whitespace-nowrap px-5 py-3 align-top font-mono text-[0.8125rem] text-ink-faint"
+											>
+												{item.standard}
+											</td>
+											<td class="whitespace-nowrap px-5 py-3 align-top">
+												<span
+													class="inline-flex rounded-md border px-2 py-0.5 font-mono text-[0.6875rem] uppercase tracking-wider {statusClass[
+														item.status
+													]}"
+												>
+													{statusLabel(item.status)}
+												</span>
+											</td>
+										</tr>
+									{/each}
+								</tbody>
+							{/each}
+						</table>
+					</div>
+				</div>
+
+				<p class="mt-5 max-w-2xl text-sm leading-relaxed text-ink-faint">
+					{t.matrix.declinedNote}
+				</p>
 			</div>
 		</section>
 

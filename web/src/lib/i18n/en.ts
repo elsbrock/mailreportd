@@ -14,6 +14,7 @@ export const en = {
 	nav: {
 		skipToContent: 'Skip to content',
 		capabilities: 'Capabilities',
+		matrix: 'Feature matrix',
 		cardinality: 'Cardinality',
 		metrics: 'Metrics',
 		start: 'Quick start',
@@ -75,6 +76,129 @@ export const en = {
 				tag: 'Ten-lookup limit',
 				title: 'SPF record health',
 				body: 'The same expansion counts the DNS lookups your record consumes. Above ten it is a permanent error at real receivers — a live deliverability fault, reported as a metric rather than discovered during an incident.'
+			}
+		]
+	},
+	matrix: {
+		heading: 'Feature matrix',
+		lede: 'Two capability classes. Reports tell you what receivers made of your mail yesterday; policy checks tell you what you are publishing right now. Neither substitutes for the other.',
+		tableCaption: 'Supported standards and capabilities',
+		columns: { feature: 'Capability', standard: 'Standard', status: 'Status' },
+		status: {
+			supported: 'Supported',
+			planned: 'Planned',
+			declined: 'Not planned'
+		},
+		declinedNote:
+			'“Not planned” means decided against, not overlooked. Each one carries its reason, because a matrix that lists only wins tells you nothing about the edges.',
+		groups: [
+			{
+				name: 'Report ingest',
+				note: 'What receivers send you, hours to a day after the fact.',
+				items: [
+					{
+						name: 'DMARC aggregate reports',
+						standard: 'RFC 7489',
+						status: 'supported',
+						note: 'Per-source authentication results, tolerant of the ways real reporters deviate from the schema.'
+					},
+					{
+						name: 'SMTP TLS reports, over mail',
+						standard: 'RFC 8460',
+						status: 'supported',
+						note: 'Session and failure counts by result type, including whether the policy in play was STS or DANE.'
+					},
+					{
+						name: 'SMTP TLS reports, over HTTPS',
+						standard: 'RFC 8460',
+						status: 'planned',
+						note: 'Some reporters submit to an endpoint rather than to a mailbox.'
+					},
+					{
+						name: 'DMARC failure reports',
+						standard: 'RFC 6591',
+						status: 'planned',
+						note: 'Carries recipient addresses and message content, so it needs encryption at rest, a shorter retention and access logging before it ships.'
+					}
+				]
+			},
+			{
+				name: 'Published policy health',
+				note: 'What your DNS says right now, checked continuously.',
+				items: [
+					{
+						name: 'SPF record and lookup budget',
+						standard: 'RFC 7208',
+						status: 'supported',
+						note: 'Above ten DNS lookups a record permerrors at real receivers. SPF stops passing entirely rather than degrading.'
+					},
+					{
+						name: 'DKIM selectors and key strength',
+						standard: 'RFC 6376',
+						status: 'supported',
+						note: 'Missing, revoked, malformed, weak or valid, told apart — a withdrawn selector and one that never existed need different fixes.'
+					},
+					{
+						name: 'DMARC record, pct and sp',
+						standard: 'RFC 7489',
+						status: 'supported',
+						note: 'A pct below 100 reads as enforcement while enforcing on a sample. The subdomain policy is resolved rather than reported raw.'
+					},
+					{
+						name: 'External destination authorisation',
+						standard: 'RFC 7489 §7.1',
+						status: 'supported',
+						note: 'Without it a third-party rua receives nothing at all, and an empty mailbox looks exactly like a quiet week.'
+					},
+					{
+						name: 'MTA-STS policy',
+						standard: 'RFC 8461',
+						status: 'supported',
+						note: 'Mode, max_age, whether the mx list still matches your live MX, and whether the body changed without its id being bumped.'
+					},
+					{
+						name: 'DANE / TLSA',
+						standard: 'RFC 7672',
+						status: 'declined',
+						note: 'Meaningful only over DNSSEC, and validating it honestly needs a validating resolver rather than a stub. Reporting presence without validation would be worse than reporting nothing.'
+					},
+					{
+						name: 'BIMI',
+						standard: 'Draft',
+						status: 'declined',
+						note: 'Requires a verified mark certificate to mean anything. Vanity, not deliverability.'
+					}
+				]
+			},
+			{
+				name: 'Inputs and outputs',
+				note: 'How reports get in, and how signals get out.',
+				items: [
+					{
+						name: 'IMAP mailbox',
+						standard: 'Read-only',
+						status: 'supported',
+						note: 'Tracks its own cursor. Never flags, moves or deletes anything.'
+					},
+					{
+						name: 'Maildir',
+						standard: '—',
+						status: 'planned',
+						note: 'For deployments that deliver locally instead of exposing IMAP.'
+					},
+					{
+						name: 'Prometheus exposition',
+						standard: 'OpenMetrics',
+						status: 'supported',
+						note: 'Bounded series only, on the private listener.'
+					},
+					{
+						name: 'JSON read API',
+						standard: '—',
+						status: 'supported',
+						note: 'The per-source detail that must never become a label.'
+					}
+				]
 			}
 		]
 	},

@@ -37,6 +37,15 @@ export const metricRows = [
 	{ metric: 'mailreport_spf_lookups', labels: 'tenant, domain' },
 	{ metric: 'mailreport_spf_lookup_limit_exceeded', labels: 'tenant, domain' },
 	{ metric: 'mailreport_dmarc_policy', labels: 'tenant, domain, p' },
+	{ metric: 'mailreport_dkim_record_state', labels: 'tenant, domain, selector, state' },
+	{ metric: 'mailreport_dkim_key_bits', labels: 'tenant, domain, selector' },
+	{ metric: 'mailreport_dmarc_record_policy', labels: 'tenant, domain, p, sp' },
+	{ metric: 'mailreport_dmarc_record_pct', labels: 'tenant, domain' },
+	{ metric: 'mailreport_dmarc_rua_authorized', labels: 'tenant, domain, rua_domain' },
+	{ metric: 'mailreport_mtasts_policy', labels: 'tenant, domain, mode' },
+	{ metric: 'mailreport_mtasts_mx_covered', labels: 'tenant, domain' },
+	{ metric: 'mailreport_mtasts_stale_id', labels: 'tenant, domain' },
+	{ metric: 'mailreport_policy_check_errors_total', labels: 'tenant, domain, check' },
 	{ metric: 'mailreport_ingest_messages_total', labels: 'tenant, feeder, result' },
 	{ metric: 'mailreport_ingest_last_success_timestamp_seconds', labels: 'tenant, feeder' }
 ] as const;
