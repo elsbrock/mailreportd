@@ -26,27 +26,107 @@ export const site = {
 	]
 } as const;
 
-/** Metric families shown in the exported-metrics table. */
+/**
+ * Metric families shown in the exported-metrics table. The help strings are
+ * the exporter's own HELP text, verbatim, so the page and the exposition
+ * cannot drift apart silently.
+ */
 export const metricRows = [
-	{ metric: 'mailreport_dmarc_messages', labels: 'tenant, domain, disposition, dkim, spf, source_class' },
-	{ metric: 'mailreport_tlsrpt_sessions', labels: 'tenant, domain, policy_type, result' },
-	{ metric: 'mailreport_tlsrpt_failures', labels: 'tenant, domain, result_type' },
-	{ metric: 'mailreport_report_last_received_timestamp_seconds', labels: 'tenant, domain, format' },
-	{ metric: 'mailreport_raw_messages', labels: 'tenant, state' },
-	{ metric: 'mailreport_spf_lookups', labels: 'tenant, domain' },
-	{ metric: 'mailreport_spf_lookup_limit_exceeded', labels: 'tenant, domain' },
-	{ metric: 'mailreport_dmarc_policy', labels: 'tenant, domain, p' },
-	{ metric: 'mailreport_dkim_record_state', labels: 'tenant, domain, selector, state' },
-	{ metric: 'mailreport_dkim_key_bits', labels: 'tenant, domain, selector' },
-	{ metric: 'mailreport_dmarc_record_policy', labels: 'tenant, domain, p, sp' },
-	{ metric: 'mailreport_dmarc_record_pct', labels: 'tenant, domain' },
-	{ metric: 'mailreport_dmarc_rua_authorized', labels: 'tenant, domain, rua_domain' },
-	{ metric: 'mailreport_mtasts_policy', labels: 'tenant, domain, mode' },
-	{ metric: 'mailreport_mtasts_mx_covered', labels: 'tenant, domain' },
-	{ metric: 'mailreport_mtasts_stale_id', labels: 'tenant, domain' },
-	{ metric: 'mailreport_policy_check_errors_total', labels: 'tenant, domain, check' },
-	{ metric: 'mailreport_ingest_messages_total', labels: 'tenant, feeder, result' },
-	{ metric: 'mailreport_ingest_last_success_timestamp_seconds', labels: 'tenant, feeder' }
+	{
+		metric: 'mailreport_dmarc_messages',
+		labels: 'tenant, domain, disposition, dkim, spf, source_class',
+		help: 'Messages reported in the aggregation window, by evaluation outcome and source class.'
+	},
+	{
+		metric: 'mailreport_tlsrpt_sessions',
+		labels: 'tenant, domain, policy_type, result',
+		help: 'SMTP TLS sessions reported in the aggregation window.'
+	},
+	{
+		metric: 'mailreport_tlsrpt_failures',
+		labels: 'tenant, domain, result_type',
+		help: 'SMTP TLS session failures in the aggregation window, by RFC 8460 result type.'
+	},
+	{
+		metric: 'mailreport_report_last_received_timestamp_seconds',
+		labels: 'tenant, domain, format',
+		help: 'Unix timestamp of the most recently ingested report, by domain and format.'
+	},
+	{
+		metric: 'mailreport_raw_messages',
+		labels: 'tenant, state',
+		help: 'Messages seen by the ingest pipeline, by outcome state.'
+	},
+	{
+		metric: 'mailreport_spf_lookups',
+		labels: 'tenant, domain',
+		help: 'DNS-querying mechanisms consumed by the domain’s SPF record.'
+	},
+	{
+		metric: 'mailreport_spf_lookup_limit_exceeded',
+		labels: 'tenant, domain',
+		help: '1 when the domain’s SPF record needs more than the RFC 7208 limit of ten DNS lookups.'
+	},
+	{
+		metric: 'mailreport_dmarc_policy',
+		labels: 'tenant, domain, p',
+		help: 'Published DMARC policy last observed by a reporter, as a label set with value 1.'
+	},
+	{
+		metric: 'mailreport_dkim_record_state',
+		labels: 'tenant, domain, selector, state',
+		help: 'Published DKIM selector state as a label set with value 1: missing, revoked, malformed, weak or ok.'
+	},
+	{
+		metric: 'mailreport_dkim_key_bits',
+		labels: 'tenant, domain, selector',
+		help: 'RSA modulus size of the published DKIM key. Receivers reject keys below 1024 bits.'
+	},
+	{
+		metric: 'mailreport_dmarc_record_policy',
+		labels: 'tenant, domain, p, sp',
+		help: 'Currently published DMARC policy, as a label set with value 1. sp is resolved, so it reflects the policy that actually applies to subdomains.'
+	},
+	{
+		metric: 'mailreport_dmarc_record_pct',
+		labels: 'tenant, domain',
+		help: 'Published DMARC pct=, defaulting to 100.'
+	},
+	{
+		metric: 'mailreport_dmarc_rua_authorized',
+		labels: 'tenant, domain, rua_domain',
+		help: '1 when an external rua destination publishes the RFC 7489 §7.1 authorization record.'
+	},
+	{
+		metric: 'mailreport_mtasts_policy',
+		labels: 'tenant, domain, mode',
+		help: 'Published MTA-STS mode as a label set with value 1. testing generates reports and enforces nothing.'
+	},
+	{
+		metric: 'mailreport_mtasts_mx_covered',
+		labels: 'tenant, domain',
+		help: '1 when every live MX host matches an mx: pattern in the policy. Drift makes enforcing senders refuse delivery.'
+	},
+	{
+		metric: 'mailreport_mtasts_stale_id',
+		labels: 'tenant, domain',
+		help: '1 when the policy body changed while its id did not, so senders keep the old policy until max_age expires.'
+	},
+	{
+		metric: 'mailreport_policy_check_errors_total',
+		labels: 'tenant, domain, check',
+		help: 'Checks that could not be completed, which is not the same as a check that failed.'
+	},
+	{
+		metric: 'mailreport_ingest_messages_total',
+		labels: 'tenant, feeder, result',
+		help: 'Messages processed by a feeder, by outcome.'
+	},
+	{
+		metric: 'mailreport_ingest_last_success_timestamp_seconds',
+		labels: 'tenant, feeder',
+		help: 'Unix timestamp of the last successful feeder run.'
+	}
 ] as const;
 
 export const endpoints = {

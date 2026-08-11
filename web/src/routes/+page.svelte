@@ -590,10 +590,17 @@
 							<tbody>
 								{#each metricRows as row (row.metric)}
 									<tr class="border-b border-line last:border-0">
-										<td class="whitespace-nowrap px-5 py-3 font-mono text-[0.8125rem] text-ink">
-											{row.metric}
+										<td class="px-5 py-3 align-top">
+											<span class="block whitespace-nowrap font-mono text-[0.8125rem] text-ink">
+												{row.metric}
+											</span>
+											<span class="mt-1 block max-w-md text-[0.8125rem] leading-relaxed text-ink-muted">
+												{row.help}
+											</span>
 										</td>
-										<td class="px-5 py-3 font-mono text-[0.8125rem] text-ink-faint">{row.labels}</td>
+										<td class="px-5 py-3 align-top font-mono text-[0.8125rem] text-ink-faint">
+											{row.labels}
+										</td>
 									</tr>
 								{/each}
 							</tbody>
