@@ -42,6 +42,11 @@
 			body: 'Session counts and failure detail, broken down by result type and policy type.'
 		},
 		{
+			tag: 'RFC 6591',
+			title: 'DMARC failure reports',
+			body: 'The failing message itself, not a count of it. The content is recipient PII, so it is encrypted at rest with a key you provide, kept seven days, and every content read is access-logged.'
+		},
+		{
 			tag: 'RFC 7208',
 			title: 'Sender classification from SPF',
 			body: 'Every reporting source is resolved against your domain’s own published SPF record and classified as self, forwarder, or unknown. Nothing about your infrastructure is hardcoded.'
@@ -50,6 +55,11 @@
 			tag: 'Ten-lookup limit',
 			title: 'SPF record health',
 			body: 'The same expansion counts the DNS lookups your record consumes. More than ten is a permanent error at real receivers, exported as a metric.'
+		},
+		{
+			tag: 'Ingest',
+			title: 'Mailbox, maildir, or HTTPS',
+			body: 'An IMAP mailbox polled read-only, a locally delivered maildir, or reporters submitting straight to POST /tlsrpt. All three enter the same parse, dedupe and storage path.'
 		}
 	];
 
@@ -315,9 +325,9 @@
 						</h1>
 
 						<p class="mt-6 max-w-xl text-lg leading-relaxed text-ink-muted">
-							mailreportd reads DMARC aggregate and SMTP TLS reports from an IMAP mailbox and exports
-							them as metrics: authentication results, TLS failures, and the health of the policies
-							you publish in DNS.
+							mailreportd reads DMARC and SMTP TLS reports from an IMAP mailbox, a local maildir, or
+							HTTPS submission, and exports them as metrics: authentication results, TLS failures,
+							and the health of the policies you publish in DNS.
 						</p>
 
 						<div class="mt-8 flex flex-wrap items-center gap-3">
@@ -391,7 +401,7 @@
 				<div class="max-w-2xl">
 					<h2 class="text-3xl font-semibold tracking-tight text-ink sm:text-4xl">What it reads</h2>
 					<p class="mt-4 text-lg leading-relaxed text-ink-muted">
-						Two RFC-defined report formats, from any receiver that sends them, with no cooperation
+						Three RFC-defined report formats, from any receiver that sends them, with no cooperation
 						required from your MTA.
 					</p>
 				</div>
