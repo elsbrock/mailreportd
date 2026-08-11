@@ -22,6 +22,11 @@ says right now.
 - **DMARC aggregate reports** (RFC 7489) — parsed into per-source authentication
   results, tolerant of the ways real reporters deviate from the schema.
 - **SMTP TLS reports** (RFC 8460) — parsed into session and failure counts.
+  Accepted over mail and, opt-in, over HTTPS submission (`POST /tlsrpt`).
+- **DMARC failure reports** (RFC 6591) — the failing message itself. The
+  content is recipient PII, so it is encrypted at rest with a key you provide
+  (`storage.failure_key_file`), kept on a separate 7-day retention, and every
+  content read is access-logged. Without a key, only the envelope is stored.
 - **Source classification** — each reporting source is resolved against the
   domain's own published SPF record and bucketed as `self`, `forwarder` or
   `unknown`. Nothing about your infrastructure is hardcoded, so this stays
@@ -70,7 +75,9 @@ $ mailreportd -config config.yaml
 
 Copy `config.example.yaml` and point it at the mailbox your `rua=` address
 delivers to. The IMAP password is named by environment variable, never written
-in the file, so the file stays committable.
+in the file, so the file stays committable. A locally delivered maildir works
+in place of IMAP: `type: maildir` with a `path`. The feeder reads `new/` and
+`cur/` and never renames, moves or deletes a file.
 
 ## Endpoints
 
@@ -81,6 +88,7 @@ Two listeners, because they carry different things.
 | Endpoint | Purpose |
 |---|---|
 | `GET /healthz` | liveness |
+| `POST /tlsrpt` | RFC 8460 report submission; only with `http.tlsrpt_submission: true` |
 
 **Private** (`http.metrics_listen`) — keep on an internal interface:
 
@@ -90,6 +98,7 @@ Two listeners, because they carry different things.
 | `GET /api/v1/domains` | per-domain summary |
 | `GET /api/v1/sources` | per-source detail, worst offenders first |
 | `GET /api/v1/signers` | who is signing your mail, busiest first |
+| `GET /api/v1/failures` | failure report envelopes; `?include=content` decrypts and is logged |
 | `GET /api/v1/quarantine` | messages that failed to parse |
 
 The read API exposes source addresses and reporter identities — together, your

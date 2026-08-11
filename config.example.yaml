@@ -8,10 +8,13 @@ log:
   format: text
 
 http:
-  # Reachable from outside; carries /healthz today and TLS-RPT submission later.
+  # Reachable from outside; carries /healthz, and POST /tlsrpt when enabled.
   listen: ":8088"
   # Keep this on a private interface.
   metrics_listen: ":9188"
+  # Accept RFC 8460 TLS report submissions over HTTPS on the public listener.
+  # Enable only if your TLS-RPT record publishes an https rua.
+  # tlsrpt_submission: true
 
 storage:
   path: /var/lib/mailreportd/reports.db
@@ -20,8 +23,13 @@ storage:
     raw: 168h
     # Aggregate report rows.
     aggregate: 8760h
-    # Failure reports contain recipient addresses and message content.
-    forensic: 720h
+    # Failure reports contain recipient addresses and message content, so
+    # their window is deliberately short.
+    forensic: 168h
+  # Hex-encoded 32-byte key (openssl rand -hex 32). Failure report content
+  # is encrypted with it at rest; without a key, only envelopes are stored
+  # and the content is dropped rather than written in the clear.
+  # failure_key_file: /run/credentials/mailreportd/failure.key
 
 policy:
   # How long a published-policy check result is reused.
@@ -51,3 +59,9 @@ feeders:
     # password_file: /run/credentials/mailreportd.service/imap-password
     mailbox: INBOX
     interval: 5m
+  # A locally delivered maildir works in place of IMAP. The feeder reads
+  # new/ and cur/ and never renames, moves or deletes a file.
+  # - type: maildir
+  #   tenant: default
+  #   path: /var/mail/dmarc
+  #   interval: 5m
