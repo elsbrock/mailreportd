@@ -36,6 +36,7 @@ type Report struct {
 	Policy      *DMARCPolicy
 	DMARCRows   []DMARCRow
 	TLSPolicies []TLSPolicy
+	Failure     *FailureDetail
 }
 
 // Identity is the deduplication key for a report. Reporters resend, mailboxes

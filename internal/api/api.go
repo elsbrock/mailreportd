@@ -50,6 +50,7 @@ func (a *API) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/domains", a.handle(a.domains))
 	mux.HandleFunc("GET /api/v1/sources", a.handle(a.sources))
 	mux.HandleFunc("GET /api/v1/signers", a.handle(a.signers))
+	mux.HandleFunc("GET /api/v1/failures", a.handle(a.failures))
 	mux.HandleFunc("GET /api/v1/quarantine", a.handle(a.quarantine))
 }
 
@@ -169,6 +170,55 @@ func (a *API) signers(r *http.Request, s *store.Store) (any, error) {
 		// complete one by a client that forgot to look.
 		"omitted": omitted,
 	}, nil
+}
+
+// failures serves failure-report metadata, and on explicit request the
+// decrypted content. The metadata view carries nothing the aggregate path
+// does not; the content view names recipients and carries message bytes, so
+// every content read is access-logged by the store, in the same transaction
+// that decrypts.
+func (a *API) failures(r *http.Request, s *store.Store) (any, error) {
+	since, err := window(r)
+	if err != nil {
+		return nil, err
+	}
+	limit, err := intParam(r, "limit", 50, 500)
+	if err != nil {
+		return nil, err
+	}
+
+	list, err := s.Failures(r.Context(), since, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	payload := map[string]any{
+		"window_start": since.UTC().Format(time.RFC3339),
+		"tenant":       s.Tenant(),
+		"failures":     nonNil(list),
+	}
+
+	switch include := r.URL.Query().Get("include"); include {
+	case "":
+	case "content":
+		ids := make([]int64, 0, len(list))
+		for _, f := range list {
+			if f.HasContent {
+				ids = append(ids, f.ID)
+			}
+		}
+		contents, err := s.FailureContents(r.Context(), ids, r.RemoteAddr)
+		if err != nil {
+			return nil, err
+		}
+		payload["content"] = contents
+		a.log.Info("failure report content read",
+			"tenant", s.Tenant(), "peer", r.RemoteAddr, "reports", len(contents))
+	default:
+		return nil, invalid("include: unknown value %q", include)
+	}
+
+	return payload, nil
 }
 
 func (a *API) quarantine(r *http.Request, s *store.Store) (any, error) {

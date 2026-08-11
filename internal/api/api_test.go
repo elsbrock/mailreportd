@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/elsbrock/mailreportd/internal/imaptest"
 	"github.com/elsbrock/mailreportd/internal/store"
 )
 
@@ -297,5 +299,80 @@ func TestSingleTenantNeedsNoTenantParameter(t *testing.T) {
 	}
 	if payload["tenant"] != "default" {
 		t.Errorf("tenant = %v", payload["tenant"])
+	}
+}
+
+func TestFailures(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "failures.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	key := make([]byte, 32)
+	rand.Read(key)
+	sealer, err := store.NewSealer(key)
+	if err != nil {
+		t.Fatalf("sealer: %v", err)
+	}
+	db.SetSealer(sealer)
+
+	s := db.Tenant("default")
+	if _, err := s.Ingest(context.Background(), store.RawMessage{
+		Feeder: "test", Received: time.Now(),
+		Body: imaptest.FailureMail(t, "arf-1", "example.org", "victim@dest.example", time.Now().Add(-12*time.Hour)),
+	}); err != nil {
+		t.Fatalf("ingest: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	New(map[string]*store.Store{"default": s}, slog.New(slog.NewTextHandler(io.Discard, nil))).Register(mux)
+
+	// The metadata view: envelope facts, no content, nothing logged.
+	code, payload := get(t, mux, "/api/v1/failures")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d", code)
+	}
+	failures, ok := payload["failures"].([]any)
+	if !ok || len(failures) != 1 {
+		t.Fatalf("failures = %v", payload["failures"])
+	}
+	f := failures[0].(map[string]any)
+	if f["domain"] != "example.org" || f["auth_failure"] != "dmarc" || f["has_content"] != true {
+		t.Fatalf("failure = %v", f)
+	}
+	if _, present := payload["content"]; present {
+		t.Fatal("content served without being asked for")
+	}
+	var logged int
+	db.SQL().QueryRow(`SELECT COUNT(*) FROM failure_access_log`).Scan(&logged)
+	if logged != 0 {
+		t.Fatalf("metadata view was access-logged: %d rows", logged)
+	}
+
+	// The content view decrypts and leaves a log row.
+	code, payload = get(t, mux, "/api/v1/failures?include=content")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d", code)
+	}
+	content, ok := payload["content"].(map[string]any)
+	if !ok || len(content) != 1 {
+		t.Fatalf("content = %v", payload["content"])
+	}
+	for _, c := range content {
+		entry := c.(map[string]any)
+		rcpt, _ := entry["original_rcpt_to"].([]any)
+		if len(rcpt) != 1 || rcpt[0] != "victim@dest.example" {
+			t.Fatalf("rcpt = %v", entry["original_rcpt_to"])
+		}
+	}
+	db.SQL().QueryRow(`SELECT COUNT(*) FROM failure_access_log`).Scan(&logged)
+	if logged != 1 {
+		t.Fatalf("content read left %d access log rows, want 1", logged)
+	}
+
+	// Anything else asked for by include is a caller error.
+	if code, _ := get(t, mux, "/api/v1/failures?include=everything"); code != http.StatusBadRequest {
+		t.Fatalf("unknown include answered %d, want 400", code)
 	}
 }

@@ -40,7 +40,8 @@ const (
 // DB is the process-wide database handle. Callers do not query it directly;
 // they obtain a tenant-scoped Store.
 type DB struct {
-	sql *sql.DB
+	sql    *sql.DB
+	sealer *Sealer
 }
 
 // Open opens or creates the database at path and applies migrations.
@@ -85,6 +86,11 @@ func (db *DB) Close() error { return db.sql.Close() }
 // SQL exposes the underlying handle for tests.
 func (db *DB) SQL() *sql.DB { return db.sql }
 
+// SetSealer installs the cipher for failure-report content. Without one,
+// failure reports are stored as envelope metadata only and their PII content
+// is dropped rather than written in the clear.
+func (db *DB) SetSealer(s *Sealer) { db.sealer = s }
+
 func (db *DB) migrate(ctx context.Context) error {
 	if _, err := db.sql.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
 		version    INTEGER PRIMARY KEY,
@@ -125,13 +131,14 @@ func (db *DB) migrate(ctx context.Context) error {
 // Tenant returns a store scoped to one tenant. Every query in the daemon goes
 // through one of these, so no query can forget the tenant predicate.
 func (db *DB) Tenant(id string) *Store {
-	return &Store{db: db.sql, tenant: id}
+	return &Store{db: db.sql, tenant: id, sealer: db.sealer}
 }
 
 // Store is a tenant-scoped view of the database.
 type Store struct {
 	db     *sql.DB
 	tenant string
+	sealer *Sealer
 }
 
 // Tenant returns the tenant this store is bound to.
@@ -234,7 +241,7 @@ func (s *Store) Ingest(ctx context.Context, msg RawMessage) (IngestResult, error
 			lastErr = err
 			continue
 		}
-		stored, err := storeReport(ctx, tx, s.tenant, rawID, rep)
+		stored, err := s.storeReport(ctx, tx, rawID, rep)
 		if err != nil {
 			return res, err
 		}
@@ -288,7 +295,8 @@ func insertRaw(ctx context.Context, tx *sql.Tx, tenant string, msg RawMessage, s
 
 // storeReport writes one normalized report and its rows. It reports whether the
 // report was new; an existing identity is a no-op rather than an error.
-func storeReport(ctx context.Context, tx *sql.Tx, tenant string, rawID int64, rep *report.Report) (bool, error) {
+func (s *Store) storeReport(ctx context.Context, tx *sql.Tx, rawID int64, rep *report.Report) (bool, error) {
+	tenant := s.tenant
 	policy := rep.Policy
 	if policy == nil {
 		policy = &report.DMARCPolicy{Pct: 100}
@@ -358,6 +366,12 @@ func storeReport(ctx context.Context, tx *sql.Tx, tenant string, rawID int64, re
 		}
 	}
 
+	if rep.Failure != nil {
+		if err := s.storeFailure(ctx, tx, reportID, rep); err != nil {
+			return false, err
+		}
+	}
+
 	day := time.Now().UTC().Format("2006-01-02")
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO ingest_usage (tenant_id, day, format, reports) VALUES (?, ?, ?, 1)
@@ -367,6 +381,54 @@ func storeReport(ctx context.Context, tx *sql.Tx, tenant string, rawID int64, re
 	}
 
 	return true, nil
+}
+
+// failureContent is the PII block of a failure report, JSON-encoded and sealed
+// before it reaches disk.
+type failureContent struct {
+	OriginalMailFrom string   `json:"original_mail_from,omitempty"`
+	OriginalRcptTo   []string `json:"original_rcpt_to,omitempty"`
+	FeedbackReport   []byte   `json:"feedback_report,omitempty"`
+	OriginalMessage  []byte   `json:"original_message,omitempty"`
+}
+
+// storeFailure writes the failure_report row hanging off a report. Without a
+// sealer the content is dropped, not written in the clear: the envelope
+// columns alone are no more sensitive than an aggregate report.
+func (s *Store) storeFailure(ctx context.Context, tx *sql.Tx, reportID int64, rep *report.Report) error {
+	f := rep.Failure
+
+	var (
+		blob      []byte
+		encrypted int
+	)
+	if s.sealer != nil {
+		plain, err := json.Marshal(failureContent{
+			OriginalMailFrom: f.OriginalMailFrom,
+			OriginalRcptTo:   f.OriginalRcptTo,
+			FeedbackReport:   f.FeedbackReport,
+			OriginalMessage:  f.OriginalMessage,
+		})
+		if err != nil {
+			return fmt.Errorf("encode failure content: %w", err)
+		}
+		if blob, err = s.sealer.Seal(plain); err != nil {
+			return fmt.Errorf("seal failure content: %w", err)
+		}
+		encrypted = 1
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO failure_report (tenant_id, report_id, domain, end_at,
+		                            auth_failure, source_ip, reporting_mta, delivery,
+		                            arrival_at, encrypted, content)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		s.tenant, reportID, rep.Domain, rep.End.Unix(),
+		f.AuthFailure, f.SourceIP, f.ReportingMTA, f.Delivery,
+		f.Arrival.Unix(), encrypted, blob); err != nil {
+		return fmt.Errorf("insert failure report: %w", err)
+	}
+	return nil
 }
 
 // IngestReport stores one already-parsed report together with its source
@@ -395,7 +457,7 @@ func (s *Store) IngestReport(ctx context.Context, msg RawMessage, rep *report.Re
 		return res, tx.Commit()
 	}
 
-	stored, err := storeReport(ctx, tx, s.tenant, rawID, rep)
+	stored, err := s.storeReport(ctx, tx, rawID, rep)
 	if err != nil {
 		return res, err
 	}
@@ -475,6 +537,7 @@ type Retention struct {
 type SweepResult struct {
 	RawBodies int64
 	Reports   int64
+	Failures  int64
 }
 
 // Sweep enforces retention.
@@ -494,6 +557,17 @@ func (s *Store) Sweep(ctx context.Context, r Retention, now time.Time) (SweepRes
 		return res, fmt.Errorf("sweep raw bodies: %w", err)
 	}
 	res.RawBodies, _ = result.RowsAffected()
+
+	// Failure reports age out on their own, shorter window. The delete targets
+	// the report row; the sealed content follows by cascade.
+	forensicCutoff := now.Add(-r.Forensic).Unix()
+	result, err = s.db.ExecContext(ctx, `
+		DELETE FROM report WHERE tenant_id = ? AND format = ? AND end_at < ?`,
+		s.tenant, string(report.FormatDMARCFailure), forensicCutoff)
+	if err != nil {
+		return res, fmt.Errorf("sweep failure reports: %w", err)
+	}
+	res.Failures, _ = result.RowsAffected()
 
 	aggCutoff := now.Add(-r.Aggregate).Unix()
 	result, err = s.db.ExecContext(ctx, `

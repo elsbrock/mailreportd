@@ -38,6 +38,10 @@ var ErrNoPayload = errors.New("message contains no report payload")
 type Payload struct {
 	Filename string
 	Data     []byte
+	// Format is set when the envelope walk already knows what this is — an ARF
+	// message, whose payload is the message itself rather than an attachment.
+	// Zero means "sniff the content", which is the common case.
+	Format Format
 }
 
 // Message is the decoded envelope of a raw RFC 5322 message.
@@ -72,6 +76,12 @@ func DecodeMessage(raw []byte) (*Message, error) {
 	collect(entity, msg)
 
 	if len(msg.Payloads) == 0 {
+		// Nothing attachment-shaped. ARF failure reports are a message
+		// structure rather than an attachment format, so they are recognized
+		// as a whole once the generic walk comes up empty.
+		if arfPayload(raw, msg) {
+			return msg, nil
+		}
 		return msg, ErrNoPayload
 	}
 	return msg, nil
@@ -206,6 +216,8 @@ func unzip(filename string, b []byte) []Payload {
 // and a misnamed report is still a report.
 func Parse(p Payload) (*Report, error) {
 	switch {
+	case p.Format == FormatDMARCFailure:
+		return ParseDMARCFailure(p.Data)
 	case looksLikeAggregate(p.Data):
 		return ParseDMARCAggregate(p.Data)
 	case looksLikeTLSRPT(p.Data):

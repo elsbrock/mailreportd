@@ -67,6 +67,20 @@ func New(cfg *config.Config, log *slog.Logger, opts Options) (*Daemon, error) {
 		return nil, err
 	}
 
+	if cfg.Storage.FailureKeyFile != "" {
+		sealer, err := store.NewSealerFromFile(cfg.Storage.FailureKeyFile)
+		if err != nil {
+			db.Close()
+			return nil, err
+		}
+		db.SetSealer(sealer)
+	} else {
+		// Worth saying at startup: failure reports will keep their envelope
+		// and lose their content, because storing recipient PII unencrypted
+		// is the one thing this daemon refuses to do.
+		log.Warn("no storage.failure_key_file configured; failure report content will not be stored")
+	}
+
 	stores := make(map[string]*store.Store, len(cfg.Tenants))
 	tenants := make([]metrics.Tenant, 0, len(cfg.Tenants))
 	for _, t := range cfg.Tenants {

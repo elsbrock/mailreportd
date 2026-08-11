@@ -229,3 +229,64 @@ func PlainMail(subject, body string) []byte {
 			"Message-Id: <%s@example.com>\r\nContent-Type: text/plain\r\n\r\n%s\r\n",
 		subject, subject, body))
 }
+
+// FailureMail builds an RFC 6591 auth-failure report: a multipart/report
+// message whose report is the MIME structure itself — a feedback-report part
+// beside the original message.
+func FailureMail(t *testing.T, msgID, domain, rcpt string, arrival time.Time) []byte {
+	t.Helper()
+
+	var b strings.Builder
+	b.WriteString("From: noreply@receiver.example\r\n")
+	b.WriteString("To: dmarc@example.org\r\n")
+	b.WriteString("Subject: Authentication failure report\r\n")
+	fmt.Fprintf(&b, "Message-Id: <%s@receiver.example>\r\n", msgID)
+	fmt.Fprintf(&b, "Date: %s\r\n", arrival.Format(time.RFC1123Z))
+	b.WriteString("MIME-Version: 1.0\r\n")
+	b.WriteString("Content-Type: multipart/report; report-type=feedback; boundary=\"ARF\"\r\n\r\n")
+
+	b.WriteString("--ARF\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n")
+	b.WriteString("This is an authentication failure report.\r\n\r\n")
+
+	b.WriteString("--ARF\r\nContent-Type: message/feedback-report\r\n\r\n")
+	b.WriteString("Feedback-Type: auth-failure\r\n")
+	b.WriteString("User-Agent: imaptest/1.0\r\n")
+	b.WriteString("Version: 1\r\n")
+	fmt.Fprintf(&b, "Original-Mail-From: <bounce@%s>\r\n", domain)
+	fmt.Fprintf(&b, "Original-Rcpt-To: %s\r\n", rcpt)
+	fmt.Fprintf(&b, "Arrival-Date: %s\r\n", arrival.Format(time.RFC1123Z))
+	b.WriteString("Source-IP: 198.51.100.7\r\n")
+	fmt.Fprintf(&b, "Reported-Domain: %s\r\n", domain)
+	b.WriteString("Reporting-MTA: dns; mx.receiver.example\r\n")
+	b.WriteString("Auth-Failure: dmarc\r\n")
+	b.WriteString("Delivery-Result: reject\r\n\r\n")
+
+	b.WriteString("--ARF\r\nContent-Type: message/rfc822\r\n\r\n")
+	fmt.Fprintf(&b, "From: news@%s\r\n", domain)
+	fmt.Fprintf(&b, "To: %s\r\n", rcpt)
+	b.WriteString("Subject: the original message\r\n")
+	fmt.Fprintf(&b, "DKIM-Signature: v=1; a=rsa-sha256; d=%s; s=mail; b=broken\r\n", domain)
+	b.WriteString("\r\nHello, this is the message that failed.\r\n")
+
+	b.WriteString("\r\n--ARF--\r\n")
+	return []byte(b.String())
+}
+
+// SpamComplaintMail builds an ARF message whose feedback type is not
+// auth-failure, which the daemon must record as ignored.
+func SpamComplaintMail(t *testing.T, msgID string) []byte {
+	t.Helper()
+
+	var b strings.Builder
+	b.WriteString("From: complaints@receiver.example\r\n")
+	b.WriteString("To: dmarc@example.org\r\n")
+	b.WriteString("Subject: Abuse report\r\n")
+	fmt.Fprintf(&b, "Message-Id: <%s@receiver.example>\r\n", msgID)
+	b.WriteString("MIME-Version: 1.0\r\n")
+	b.WriteString("Content-Type: multipart/report; report-type=feedback; boundary=\"ARF\"\r\n\r\n")
+	b.WriteString("--ARF\r\nContent-Type: text/plain\r\n\r\nThis is spam.\r\n")
+	b.WriteString("--ARF\r\nContent-Type: message/feedback-report\r\n\r\n")
+	b.WriteString("Feedback-Type: abuse\r\nUser-Agent: imaptest/1.0\r\nVersion: 1\r\n")
+	b.WriteString("\r\n--ARF--\r\n")
+	return []byte(b.String())
+}

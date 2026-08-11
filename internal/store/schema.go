@@ -109,4 +109,38 @@ CREATE TABLE ingest_usage (
 	PRIMARY KEY (tenant_id, day, format)
 );
 `,
+	`
+-- Failure reports (RFC 6591). The clear columns are envelope facts no more
+-- sensitive than what aggregate reports carry; everything naming a recipient
+-- or containing message content lives in the sealed content blob. A NULL
+-- content with encrypted = 0 means no key was configured at ingest time and
+-- the PII was deliberately dropped.
+CREATE TABLE failure_report (
+	id            INTEGER PRIMARY KEY AUTOINCREMENT,
+	tenant_id     TEXT    NOT NULL,
+	report_id     INTEGER NOT NULL REFERENCES report (id) ON DELETE CASCADE,
+	domain        TEXT    NOT NULL,
+	end_at        INTEGER NOT NULL,
+	auth_failure  TEXT    NOT NULL DEFAULT '',
+	source_ip     TEXT    NOT NULL DEFAULT '',
+	reporting_mta TEXT    NOT NULL DEFAULT '',
+	delivery      TEXT    NOT NULL DEFAULT '',
+	arrival_at    INTEGER NOT NULL,
+	encrypted     INTEGER NOT NULL DEFAULT 0,
+	content       BLOB
+);
+
+CREATE INDEX idx_failure_window ON failure_report (tenant_id, end_at, domain);
+CREATE INDEX idx_failure_report ON failure_report (report_id);
+
+-- Every read of decrypted failure content leaves a row here. The metadata
+-- view is not logged; it contains nothing the aggregate path does not.
+CREATE TABLE failure_access_log (
+	id         INTEGER PRIMARY KEY AUTOINCREMENT,
+	tenant_id  TEXT    NOT NULL,
+	at         INTEGER NOT NULL,
+	peer       TEXT    NOT NULL DEFAULT '',
+	report_ids TEXT    NOT NULL DEFAULT '[]'
+);
+`,
 }

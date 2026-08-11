@@ -53,6 +53,11 @@ type Storage struct {
 	Path          string        `yaml:"path"`
 	Retention     Retention     `yaml:"retention"`
 	SweepInterval time.Duration `yaml:"sweep_interval"`
+	// FailureKeyFile names a file holding a hex-encoded 32-byte key. Failure
+	// report content — recipient addresses, message content — is encrypted
+	// with it at rest. Without a key the daemon stores failure envelopes only
+	// and drops the content, rather than writing PII in the clear.
+	FailureKeyFile string `yaml:"failure_key_file"`
 }
 
 // Retention holds per-class retention windows. Failure reports carry recipient
@@ -213,7 +218,10 @@ func (c *Config) applyDefaults() {
 		c.Storage.Retention.Aggregate = 365 * 24 * time.Hour
 	}
 	if c.Storage.Retention.Forensic == 0 {
-		c.Storage.Retention.Forensic = 30 * 24 * time.Hour
+		// Deliberately short. A failure report exists to debug a live problem;
+		// debugging that waits a month has lost its evidence anyway, and the
+		// content is recipient PII.
+		c.Storage.Retention.Forensic = 7 * 24 * time.Hour
 	}
 	if c.Storage.SweepInterval == 0 {
 		c.Storage.SweepInterval = 6 * time.Hour
