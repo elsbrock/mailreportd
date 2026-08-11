@@ -7,10 +7,10 @@
 
 	let { path = '/' }: Props = $props();
 
-	const title = 'mailreportd — DMARC and TLS report ingest for your own mail stack';
+	const title = 'mailreportd — Prometheus metrics from DMARC and TLS reports';
 	const description =
-		'A single binary that ingests DMARC aggregate and SMTP TLS reports from a mailbox, classifies every sender against your own SPF record, and exports bounded Prometheus metrics. No SaaS, no data leaves your network.';
-	const ogAlt = 'mailreportd — DMARC and SMTP TLS report ingest';
+		'A single self-hosted Go binary that reads DMARC aggregate and SMTP TLS reports from an IMAP mailbox and exports Prometheus metrics and a JSON API.';
+	const ogAlt = 'mailreportd: DMARC and TLS report metrics for Prometheus';
 
 	/** Mirrors the capability cards on the page. */
 	const featureList = [

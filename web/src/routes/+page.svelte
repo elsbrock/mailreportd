@@ -17,16 +17,16 @@
 
 	const problems = [
 		{
-			title: 'TLS quietly stops negotiating',
-			body: 'A certificate rotation, a stale policy, a firewall change. Senders fall back or fail, and your logs show nothing at all, because the failure happens on their side of the connection.'
+			title: 'TLS negotiation failures',
+			body: 'A certificate rotation, a stale policy, or a firewall change can break TLS negotiation. The failure happens on the sender’s side of the connection, so it does not show up in your logs.'
 		},
 		{
-			title: 'Signatures fail at the receiver',
-			body: 'Mail leaves correctly and arrives unauthenticated. A rotated key, an unaligned signing domain, a relay that rewrites headers. Your MTA reported a successful handoff.'
+			title: 'DKIM and SPF fail at the receiver',
+			body: 'Mail can leave your MTA correctly and still arrive unauthenticated. A rotated key, an unaligned signing domain, or a relay that rewrites headers can break DKIM or SPF at the receiver, while your MTA only reported a successful handoff.'
 		},
 		{
-			title: 'Someone else is sending as you',
-			body: 'Spoofing and forgotten legacy senders both show up only in aggregate reports. Without parsing them, moving to an enforcing policy is guesswork.'
+			title: 'Spoofing and forgotten senders',
+			body: 'Spoofing and forgotten legacy senders both show up only in aggregate reports. Parsing them is a prerequisite for moving to an enforcing DMARC policy.'
 		}
 	];
 
@@ -34,22 +34,22 @@
 		{
 			tag: 'RFC 7489',
 			title: 'DMARC aggregate reports',
-			body: 'Parsed into per-source authentication results, deliberately tolerant of the ways real reporters deviate from the published schema — padded integers, ISO timestamps where Unix seconds belong, unexpected character sets.'
+			body: 'Parsed into per-source authentication results. The parser tolerates common schema deviations: padded integers, ISO timestamps where Unix seconds belong, and unexpected character sets.'
 		},
 		{
 			tag: 'RFC 8460',
 			title: 'SMTP TLS reports',
-			body: 'Session counts and failure detail by result type, so a sender failing to negotiate TLS with you becomes a number on a dashboard instead of a silence.'
+			body: 'Session counts and failure detail, broken down by result type and policy type.'
 		},
 		{
 			tag: 'RFC 7208',
 			title: 'Sender classification from SPF',
-			body: 'Every reporting source is resolved against your domain’s own published SPF record and bucketed as yours, a forwarder, or unknown. Nothing about your infrastructure is hardcoded, so it stays correct when your infrastructure changes.'
+			body: 'Every reporting source is resolved against your domain’s own published SPF record and classified as self, forwarder, or unknown. Nothing about your infrastructure is hardcoded.'
 		},
 		{
 			tag: 'Ten-lookup limit',
 			title: 'SPF record health',
-			body: 'The same expansion counts the DNS lookups your record consumes. Above ten it is a permanent error at real receivers — a live deliverability fault, reported as a metric rather than discovered during an incident.'
+			body: 'The same expansion counts the DNS lookups your record consumes. More than ten is a permanent error at real receivers, exported as a metric.'
 		}
 	];
 
@@ -98,7 +98,7 @@
 					name: 'DKIM selectors and key strength',
 					standard: 'RFC 6376',
 					status: 'supported',
-					note: 'Missing, revoked, malformed, weak or valid, told apart — a withdrawn selector and one that never existed need different fixes.'
+					note: 'Distinguishes missing, revoked, malformed, weak, and valid selector states; each needs a different fix.'
 				},
 				{
 					name: 'DMARC record, pct and sp',
@@ -107,10 +107,10 @@
 					note: 'A pct below 100 reads as enforcement while enforcing on a sample. The subdomain policy is resolved rather than reported raw.'
 				},
 				{
-					name: 'External destination authorisation',
+					name: 'External destination authorization',
 					standard: 'RFC 7489 §7.1',
 					status: 'supported',
-					note: 'Without it a third-party rua receives nothing at all, and an empty mailbox looks exactly like a quiet week.'
+					note: 'Verifies the record that authorizes a third-party rua address to receive your reports.'
 				},
 				{
 					name: 'MTA-STS policy',
@@ -122,13 +122,13 @@
 					name: 'DANE / TLSA',
 					standard: 'RFC 7672',
 					status: 'declined',
-					note: 'Meaningful only over DNSSEC, and validating it honestly needs a validating resolver rather than a stub. Reporting presence without validation would be worse than reporting nothing.'
+					note: 'Only meaningful over DNSSEC, and validating it requires a validating resolver rather than a stub resolver.'
 				},
 				{
 					name: 'BIMI',
 					standard: 'Draft',
 					status: 'declined',
-					note: 'Requires a verified mark certificate to mean anything. Vanity, not deliverability.'
+					note: 'Requires a verified mark certificate and has no effect on deliverability.'
 				}
 			]
 		},
@@ -167,15 +167,15 @@
 	const buckets = [
 		{
 			key: 'self',
-			note: 'Authorised by your SPF record, or by an explicit operator override.',
+			note: 'Authorized by your SPF record, or by an explicit operator override.',
 			tone: 'pass'
 		},
 		{
 			key: 'forwarder',
-			note: 'Not authorised, but carrying an aligned DKIM signature — the signature of forwarding, where SPF breaks across a hop and DKIM survives it.',
+			note: 'Not authorized by SPF, but carrying an aligned DKIM signature. SPF breaks across a forwarding hop; DKIM survives it.',
 			tone: 'warn'
 		},
-		{ key: 'unknown', note: 'Everything else. This is the bucket that actually needs attention.', tone: 'fail' }
+		{ key: 'unknown', note: 'Everything else: spoofing, misconfiguration, or senders you forgot about.', tone: 'fail' }
 	];
 
 	const metricNotes = [
@@ -184,8 +184,8 @@
 			body: 'Reports arrive a day late and out of order, and retention deletes old ones. A counter would be non-monotonic and rate() would report nonsense. Alert on ratios within the window instead.'
 		},
 		{
-			title: 'Staleness is expressible',
-			body: 'A zero failure rate because nothing was ingested looks identical to a zero failure rate because nothing failed. A last-received timestamp per domain and format is exported so you can tell those apart.'
+			title: 'Staleness is a separate metric',
+			body: 'A zero failure rate can mean nothing failed, or it can mean nothing was ingested. A last-received timestamp per domain and format distinguishes the two.'
 		}
 	];
 
@@ -193,17 +193,17 @@
 		{
 			severity: 'warning',
 			title: 'Authentication regression',
-			body: 'The pass rate for your own sources drops over a sustained window. Your mail is failing somewhere.'
+			body: 'Alert when the pass rate for your own sources drops over a sustained window. It means your mail is failing somewhere.'
 		},
 		{
 			severity: 'warning',
 			title: 'TLS negotiation failures',
-			body: 'Any failed session count above zero. There is no acceptable baseline for senders failing to reach you over TLS.'
+			body: 'Alert on any failed session count above zero. There is no acceptable baseline for senders failing to reach you over TLS.'
 		},
 		{
 			severity: 'never',
 			title: 'Not report volume',
-			body: 'Aggregate reports arriving late, or not at all, is entirely normal and not actionable. Alerting on it only teaches people to ignore the alerts.'
+			body: 'Aggregate reports arriving late, or not at all, is normal and not actionable. Alerting on it teaches people to ignore the alerts.'
 		}
 	];
 
@@ -214,14 +214,14 @@
 		},
 		{
 			title: 'Ingest is idempotent',
-			body: 'Identical bytes are recognised by checksum, and the same report arriving under a different envelope by report identity. Reprocessing the entire mailbox is safe, and is the supported recovery path.'
+			body: 'Identical bytes are recognized by checksum, and the same report arriving under a different envelope by report identity. Reprocessing the entire mailbox is safe, and is the supported recovery path.'
 		},
 		{
 			title: 'Nothing is deleted for failing to parse',
 			body: 'Unparseable reports go to quarantine with the error and the original bytes, and survive retention sweeps. Autoreplies and spam are recorded as ignored, not as failures.'
 		},
 		{
-			title: 'Protocols, not products',
+			title: 'Works with any mail setup',
 			body: 'No MTA admin API, no delivery-provider API, no log tailing, and no assumption that you run any particular mail server, dashboard or deployment tool.'
 		}
 	];
@@ -285,7 +285,7 @@
 			</nav>
 
 			<div class="ml-auto flex items-center gap-2 md:ml-0">
-				<ThemeToggle label="Switch colour theme" />
+				<ThemeToggle label="Switch color theme" />
 			</div>
 		</div>
 	</header>
@@ -310,13 +310,14 @@
 						</p>
 
 						<h1 class="mt-6 text-4xl font-semibold leading-[1.1] tracking-tight text-ink sm:text-5xl lg:text-[3.4rem]">
-							Your mail stack fails quietly.
-							<span class="block text-accent">This tells you.</span>
+							Prometheus metrics from the mail reports
+							<span class="block text-accent">you already receive.</span>
 						</h1>
 
 						<p class="mt-6 max-w-xl text-lg leading-relaxed text-ink-muted">
-							mailreportd reads the DMARC and SMTP TLS reports that receivers already send you, and
-							turns them into metrics you can alert on. One binary, one config file, one mailbox.
+							mailreportd reads DMARC aggregate and SMTP TLS reports from an IMAP mailbox and exports
+							them as metrics: authentication results, TLS failures, and the health of the policies
+							you publish in DNS.
 						</p>
 
 						<div class="mt-8 flex flex-wrap items-center gap-3">
@@ -359,11 +360,11 @@
 			<div class="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
 				<div class="max-w-2xl">
 					<h2 class="text-3xl font-semibold tracking-tight text-ink sm:text-4xl">
-						Silence is not the same as health
+						What the reports catch
 					</h2>
 					<p class="mt-4 text-lg leading-relaxed text-ink-muted">
-						Authentication breaks in ways that produce no error on your side. The receiver knows. You
-						do not — unless something is reading what the receiver sends back.
+						Authentication failures often produce no error on the sending side. The receiver sees them
+						and reports them back.
 					</p>
 				</div>
 
@@ -413,9 +414,8 @@
 				<div class="max-w-2xl">
 					<h2 class="text-3xl font-semibold tracking-tight text-ink sm:text-4xl">Feature matrix</h2>
 					<p class="mt-4 text-lg leading-relaxed text-ink-muted">
-						Two capability classes. Reports tell you what receivers made of your mail yesterday;
-						policy checks tell you what you are publishing right now. Neither substitutes for the
-						other.
+						Report ingest covers what receivers observed about your mail. Policy checks cover what
+						your DNS publishes right now.
 					</p>
 				</div>
 
@@ -480,8 +480,7 @@
 				</div>
 
 				<p class="mt-5 max-w-2xl text-sm leading-relaxed text-ink-faint">
-					“Not planned” means decided against, not overlooked. Each one carries its reason, because a
-					matrix that lists only wins tells you nothing about the edges.
+					“Not planned” entries are deliberate decisions. The reason is listed with each one.
 				</p>
 			</div>
 		</section>
@@ -496,7 +495,7 @@
 					<p class="mt-4 text-lg leading-relaxed text-ink-muted">
 						A month of aggregate reports for a handful of domains contains tens of thousands of
 						distinct source addresses, most of them seen exactly once. Exporting those as Prometheus
-						labels would destroy the database you are trying to fill.
+						labels would create unbounded cardinality and overwhelm the metrics store.
 					</p>
 					<p class="mt-4 leading-relaxed text-ink-muted">
 						So the store keeps the full detail and Prometheus receives bounded series only. Sources
@@ -647,9 +646,8 @@
 				<div class="mt-16">
 					<h3 class="text-lg font-semibold text-ink">Two listeners</h3>
 					<p class="mt-3 max-w-2xl leading-relaxed text-ink-muted">
-						They carry different things. The read API exposes source addresses and reporter
-						identities — together, your whole sending topology — which is why it is not on the public
-						one.
+						The read API exposes source addresses and reporter identities, which together reveal your
+						sending topology. That is why it runs on the private listener only.
 					</p>
 
 					<div class="mt-6 grid gap-6 md:grid-cols-2">
