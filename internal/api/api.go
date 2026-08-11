@@ -49,6 +49,7 @@ func New(stores map[string]*store.Store, log *slog.Logger) *API {
 func (a *API) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/domains", a.handle(a.domains))
 	mux.HandleFunc("GET /api/v1/sources", a.handle(a.sources))
+	mux.HandleFunc("GET /api/v1/signers", a.handle(a.signers))
 	mux.HandleFunc("GET /api/v1/quarantine", a.handle(a.quarantine))
 }
 
@@ -140,6 +141,33 @@ func (a *API) sources(r *http.Request, s *store.Store) (any, error) {
 		"window_start": since.UTC().Format(time.RFC3339),
 		"tenant":       s.Tenant(),
 		"sources":      nonNil(sources),
+	}, nil
+}
+
+// signers answers who is signing mail for a domain, which is not the same
+// question as whether that mail passes. A signature can verify and still
+// contribute nothing, because DMARC scores alignment rather than validity.
+func (a *API) signers(r *http.Request, s *store.Store) (any, error) {
+	since, err := window(r)
+	if err != nil {
+		return nil, err
+	}
+	limit, err := intParam(r, "limit", 100, 1000)
+	if err != nil {
+		return nil, err
+	}
+
+	signers, omitted, err := s.Signers(r.Context(), since, r.URL.Query().Get("domain"), limit)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"window_start": since.UTC().Format(time.RFC3339),
+		"tenant":       s.Tenant(),
+		"signers":      nonNil(signers),
+		// Always present, so a truncated answer cannot be mistaken for a
+		// complete one by a client that forgot to look.
+		"omitted": omitted,
 	}, nil
 }
 

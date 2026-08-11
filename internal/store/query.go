@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/netip"
+	"strings"
 	"time"
 
 	"github.com/elsbrock/mailreportd/internal/report"
@@ -254,6 +255,148 @@ func (s *Store) Sources(ctx context.Context, since time.Time, domain string, lim
 		out = append(out, d)
 	}
 	return out, rows.Err()
+}
+
+// SignerDetail is one DKIM signing identity seen signing mail for a domain.
+//
+// Messages counts every message the signature appeared on. SignaturePass counts
+// those where the signature itself verified, and EvaluatedPass those where the
+// receiver's own aligned DKIM verdict passed. The two differ precisely when a
+// signature is valid but unaligned, which is the case this endpoint exists to
+// make visible.
+type SignerDetail struct {
+	SigningDomain string `json:"signing_domain"`
+	Selector      string `json:"selector"`
+	Domain        string `json:"domain"`
+	Relationship  string `json:"relationship"`
+	Messages      int64  `json:"messages"`
+	SignaturePass int64  `json:"signature_pass"`
+	EvaluatedPass int64  `json:"evaluated_dkim_pass"`
+	FirstSeen     string `json:"first_seen"`
+	LastSeen      string `json:"last_seen"`
+}
+
+// SignerTotals is the collapsed remainder: everything the top-N cut off.
+type SignerTotals struct {
+	Signers  int64 `json:"signers"`
+	Messages int64 `json:"messages"`
+}
+
+// Relationship values. Deliberately not called "aligned": relaxed alignment is
+// equality of organizational domains, which needs a public suffix list to
+// compute. The receiver already evaluated real alignment and we report that
+// verdict separately, in EvaluatedPass.
+const (
+	// RelationExact is a signing domain identical to the policy domain.
+	RelationExact = "exact"
+	// RelationSubdomain is one a label or more below the other, either way
+	// around. Under relaxed alignment — the default — this aligns.
+	RelationSubdomain = "subdomain"
+	// RelationForeign shares no suffix with the policy domain. Under relaxed
+	// alignment it may still align if both sit under one organizational
+	// domain, which is the case a suffix rule alone cannot see.
+	RelationForeign = "foreign"
+)
+
+const signerFrom = `
+	FROM dmarc_row r, json_each(r.dkim_auth) j
+	WHERE r.tenant_id = ? AND r.end_at >= ? AND (? = '' OR r.domain = ?)`
+
+// Signers returns the DKIM signing identities seen over the window, busiest
+// first, plus the remainder the limit cut off.
+//
+// Grouping happens in SQL over json_each rather than by scanning rows into Go,
+// because the signing domain is chosen by whoever sent the message: a spoofer
+// can emit a distinct d= per message, and the row set is the one thing here
+// that an outsider can inflate at will. The aggregate never leaves the
+// database unbounded, and the caller's limit bounds what does.
+func (s *Store) Signers(ctx context.Context, since time.Time, domain string, limit int) ([]SignerDetail, SignerTotals, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	var totals SignerTotals
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*), COALESCE(SUM(m), 0) FROM (
+			SELECT SUM(r.message_count) AS m`+signerFrom+`
+			GROUP BY json_extract(j.value, '$.Domain'),
+			         json_extract(j.value, '$.Selector'), r.domain)`,
+		s.tenant, since.Unix(), domain, domain).Scan(&totals.Signers, &totals.Messages)
+	if err != nil {
+		return nil, SignerTotals{}, fmt.Errorf("count signers: %w", err)
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT COALESCE(json_extract(j.value, '$.Domain'), ''),
+		       COALESCE(json_extract(j.value, '$.Selector'), ''),
+		       r.domain,
+		       SUM(r.message_count),
+		       SUM(CASE WHEN json_extract(j.value, '$.Result') = 'pass'
+		                THEN r.message_count ELSE 0 END),
+		       SUM(CASE WHEN r.dkim = 'pass' THEN r.message_count ELSE 0 END),
+		       MIN(r.end_at), MAX(r.end_at)`+signerFrom+`
+		GROUP BY 1, 2, 3
+		ORDER BY SUM(r.message_count) DESC, 1, 2
+		LIMIT ?`,
+		s.tenant, since.Unix(), domain, domain, limit)
+	if err != nil {
+		return nil, SignerTotals{}, fmt.Errorf("query signers: %w", err)
+	}
+	defer rows.Close()
+
+	var out []SignerDetail
+	for rows.Next() {
+		var (
+			d                   SignerDetail
+			firstSeen, lastSeen int64
+		)
+		if err := rows.Scan(&d.SigningDomain, &d.Selector, &d.Domain, &d.Messages,
+			&d.SignaturePass, &d.EvaluatedPass, &firstSeen, &lastSeen); err != nil {
+			return nil, SignerTotals{}, fmt.Errorf("scan signer: %w", err)
+		}
+		d.Relationship = Relationship(d.SigningDomain, d.Domain)
+		d.FirstSeen = time.Unix(firstSeen, 0).UTC().Format(time.RFC3339)
+		d.LastSeen = time.Unix(lastSeen, 0).UTC().Format(time.RFC3339)
+		out = append(out, d)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, SignerTotals{}, err
+	}
+
+	// What the limit cut off, so a truncated answer never reads as a complete
+	// one.
+	for _, d := range out {
+		totals.Messages -= d.Messages
+	}
+	totals.Signers -= int64(len(out))
+	if totals.Signers < 0 {
+		totals.Signers = 0
+	}
+	if totals.Messages < 0 {
+		totals.Messages = 0
+	}
+	return out, totals, nil
+}
+
+// Relationship classifies a signing domain against the policy domain it signed
+// for. Comparison is case-insensitive and ignores a trailing root dot, both of
+// which reporters emit inconsistently.
+func Relationship(signing, policy string) string {
+	a := normalizeDomain(signing)
+	b := normalizeDomain(policy)
+	switch {
+	case a == "" || b == "":
+		return RelationForeign
+	case a == b:
+		return RelationExact
+	case strings.HasSuffix(a, "."+b), strings.HasSuffix(b, "."+a):
+		return RelationSubdomain
+	default:
+		return RelationForeign
+	}
+}
+
+func normalizeDomain(d string) string {
+	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(d), "."))
 }
 
 // QuarantineEntry is a message that could not be parsed.

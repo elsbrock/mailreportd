@@ -40,6 +40,59 @@ const aggregateXML = `<?xml version="1.0" encoding="UTF-8" ?>
   </record>
 </feedback>`
 
+// The relayed fixture is the production shape that motivated Signers: mail
+// leaving through a relay carries two passing signatures, and only one of them
+// is aligned. The receiver's own verdict is dkim=pass, earned entirely by the
+// example.org signature; the relay's own d= contributes nothing to DMARC despite
+// verifying. A third record signs from a subdomain, which relaxed alignment
+// accepts and a suffix rule can see.
+const relayedAggregateXML = `<?xml version="1.0" encoding="UTF-8" ?>
+<feedback>
+  <report_metadata>
+    <org_name>fastmail pty ltd</org_name>
+    <email>reports@fastmaildmarc.com</email>
+    <report_id>2108667705</report_id>
+    <date_range><begin>1754006400</begin><end>1754092799</end></date_range>
+  </report_metadata>
+  <policy_published>
+    <domain>example.org</domain><p>reject</p><sp>reject</sp><pct>100</pct>
+  </policy_published>
+  <record>
+    <row><source_ip>192.0.2.114</source_ip><count>7</count>
+      <policy_evaluated><disposition>none</disposition><dkim>pass</dkim><spf>pass</spf></policy_evaluated>
+    </row>
+    <identifiers><header_from>example.org</header_from></identifiers>
+    <auth_results>
+      <dkim><domain>relay-smtp.net</domain><result>pass</result><selector>rly2024-1</selector></dkim>
+      <dkim><domain>example.org</domain><result>pass</result><selector>selector1</selector></dkim>
+      <spf><domain>bounce.example.org</domain><scope>mfrom</scope><result>pass</result></spf>
+    </auth_results>
+  </record>
+  <record>
+    <row><source_ip>198.51.100.9</source_ip><count>2</count>
+      <policy_evaluated><disposition>reject</disposition><dkim>fail</dkim><spf>fail</spf></policy_evaluated>
+    </row>
+    <identifiers><header_from>example.org</header_from></identifiers>
+    <auth_results>
+      <dkim><domain>relay-smtp.net</domain><result>fail</result><selector>rly2024-1</selector></dkim>
+    </auth_results>
+  </record>
+  <record>
+    <row><source_ip>203.0.113.7</source_ip><count>4</count>
+      <policy_evaluated><disposition>none</disposition><dkim>pass</dkim><spf>fail</spf></policy_evaluated>
+    </row>
+    <identifiers><header_from>example.org</header_from></identifiers>
+    <auth_results>
+      <dkim><domain>news.example.org</domain><result>pass</result><selector>mktg</selector></dkim>
+    </auth_results>
+  </record>
+</feedback>`
+
+func relayedAggregateMessage(t *testing.T) []byte {
+	t.Helper()
+	return mimeMessage("Report Domain: example.org relayed", "relayed.xml.gz", gz(t, relayedAggregateXML))
+}
+
 const tlsJSON = `{
   "organization-name": "Google Inc.",
   "date-range": {"start-datetime": "2026-08-01T00:00:00Z", "end-datetime": "2026-08-01T23:59:59Z"},

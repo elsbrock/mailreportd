@@ -89,10 +89,29 @@ Two listeners, because they carry different things.
 | `GET /metrics` | Prometheus exposition |
 | `GET /api/v1/domains` | per-domain summary |
 | `GET /api/v1/sources` | per-source detail, worst offenders first |
+| `GET /api/v1/signers` | who is signing your mail, busiest first |
 | `GET /api/v1/quarantine` | messages that failed to parse |
 
 The read API exposes source addresses and reporter identities — together, your
 whole sending topology. That is why it is not on the public listener.
+
+`/api/v1/signers` answers a question the pass rate cannot: a DKIM signature can
+verify and still contribute nothing, because DMARC scores alignment rather than
+validity. Each entry carries `signature_pass` (the signature verified) beside
+`evaluated_dkim_pass` (the receiver's aligned verdict); a signer where the first
+is high and the second is not is signing your mail without carrying it. A relay
+signing under its own domain looks exactly like this.
+
+`relationship` is `exact`, `subdomain` or `foreign`, describing the signing
+domain against the policy domain. It is deliberately not called "aligned":
+relaxed alignment compares organizational domains, which needs a public suffix
+list, so two sibling subdomains report as `foreign` while actually aligning.
+The receiver's own verdict is the authority, and it is in the same response.
+
+Because the signing domain is chosen by whoever sends the message — including
+anyone spoofing you — the response is capped and always carries an `omitted`
+object with the signers and message volume the limit cut off. For the same
+reason `d=` is never a Prometheus label.
 
 Query parameters: `window` (Go duration, default `720h`), `domain`, `limit`,
 `tenant`.

@@ -29,10 +29,17 @@ func aggregateXML() string {
   <policy_published><domain>example.org</domain><p>reject</p><pct>100</pct></policy_published>
   <record><row><source_ip>203.0.113.10</source_ip><count>100</count>
     <policy_evaluated><disposition>none</disposition><dkim>pass</dkim><spf>pass</spf></policy_evaluated></row>
-    <identifiers><header_from>example.org</header_from></identifiers></record>
+    <identifiers><header_from>example.org</header_from></identifiers>
+    <auth_results>
+      <dkim><domain>relay-smtp.net</domain><selector>rly1</selector><result>pass</result></dkim>
+      <dkim><domain>example.org</domain><selector>selector1</selector><result>pass</result></dkim>
+    </auth_results></record>
   <record><row><source_ip>192.0.2.66</source_ip><count>40</count>
     <policy_evaluated><disposition>reject</disposition><dkim>fail</dkim><spf>fail</spf></policy_evaluated></row>
-    <identifiers><header_from>example.org</header_from></identifiers></record>
+    <identifiers><header_from>example.org</header_from></identifiers>
+    <auth_results>
+      <dkim><domain>spoofer.example</domain><selector>x</selector><result>fail</result></dkim>
+    </auth_results></record>
 </feedback>`, begin.Unix(), end.Unix())
 }
 
@@ -159,6 +166,68 @@ func TestEmptyResultsAreArraysNotNull(t *testing.T) {
 	_, payload := get(t, testAPI(t), "/api/v1/quarantine")
 	if _, ok := payload["entries"].([]any); !ok {
 		t.Errorf("entries = %#v, want an array", payload["entries"])
+	}
+}
+
+func TestSignersDistinguishesForeignFromExact(t *testing.T) {
+	code, payload := get(t, testAPI(t), "/api/v1/signers")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d", code)
+	}
+
+	signers, ok := payload["signers"].([]any)
+	if !ok || len(signers) != 3 {
+		t.Fatalf("signers = %#v", payload["signers"])
+	}
+
+	byDomain := map[string]map[string]any{}
+	for _, s := range signers {
+		m := s.(map[string]any)
+		byDomain[m["signing_domain"].(string)] = m
+	}
+
+	// The relay signs 100 messages and verifies on all of them, yet it is
+	// foreign: none of that validity is what earned the receiver's dkim=pass.
+	relay := byDomain["relay-smtp.net"]
+	if relay == nil {
+		t.Fatalf("no relay-smtp.net in %#v", byDomain)
+	}
+	if relay["relationship"] != "foreign" {
+		t.Errorf("relay relationship = %v, want foreign", relay["relationship"])
+	}
+	if relay["signature_pass"].(float64) != 100 {
+		t.Errorf("relay signature_pass = %v, want 100", relay["signature_pass"])
+	}
+
+	if byDomain["example.org"]["relationship"] != "exact" {
+		t.Errorf("own relationship = %v, want exact", byDomain["example.org"]["relationship"])
+	}
+	if byDomain["spoofer.example"]["relationship"] != "foreign" {
+		t.Errorf("spoofer relationship = %v, want foreign", byDomain["spoofer.example"]["relationship"])
+	}
+
+	// The remainder is always reported, even when nothing was cut off.
+	omitted, ok := payload["omitted"].(map[string]any)
+	if !ok {
+		t.Fatalf("omitted = %#v, want an object", payload["omitted"])
+	}
+	if omitted["signers"].(float64) != 0 {
+		t.Errorf("omitted signers = %v, want 0", omitted["signers"])
+	}
+}
+
+func TestSignersReportsWhatTheLimitCutOff(t *testing.T) {
+	_, payload := get(t, testAPI(t), "/api/v1/signers?limit=1")
+
+	if len(payload["signers"].([]any)) != 1 {
+		t.Fatalf("signers = %#v, want one", payload["signers"])
+	}
+	omitted := payload["omitted"].(map[string]any)
+	if omitted["signers"].(float64) != 2 {
+		t.Errorf("omitted signers = %v, want 2", omitted["signers"])
+	}
+	if omitted["messages"].(float64) == 0 {
+		t.Error("omitted messages = 0, want the cut-off volume")
 	}
 }
 
