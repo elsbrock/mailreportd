@@ -298,6 +298,13 @@ func buildFeeders(cfg *config.Config, stores map[string]*store.Store, log *slog.
 				Interval: f.Interval,
 				Insecure: f.Insecure,
 			}, s, log))
+		case "maildir":
+			out = append(out, feeder.NewMaildir(feeder.MaildirConfig{
+				Name:     f.Name,
+				Tenant:   f.Tenant,
+				Path:     f.Path,
+				Interval: f.Interval,
+			}, s, log))
 		default:
 			return nil, fmt.Errorf("feeders[%d]: unknown type %q", i, f.Type)
 		}

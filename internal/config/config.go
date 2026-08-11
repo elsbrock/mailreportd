@@ -119,8 +119,11 @@ type Feeder struct {
 	// must stay stable across restarts: changing it makes the feeder rescan the
 	// mailbox from the beginning.
 	Name   string `yaml:"name"`
-	Type   string `yaml:"type"` // imap
+	Type   string `yaml:"type"` // imap or maildir
 	Tenant string `yaml:"tenant"`
+
+	// Maildir
+	Path string `yaml:"path"`
 
 	// IMAP
 	Host        string `yaml:"host"`
@@ -239,6 +242,8 @@ func (c *Config) applyDefaults() {
 			if f.Mailbox == "" {
 				f.Mailbox = "INBOX"
 			}
+		}
+		if f.Type == "imap" || f.Type == "maildir" {
 			if f.Interval == 0 {
 				f.Interval = 5 * time.Minute
 			}
@@ -300,6 +305,10 @@ func (c *Config) validate() error {
 			}
 			if f.PasswordEnv == "" && f.PasswordFile == "" {
 				return fmt.Errorf("feeders[%d]: one of password_env or password_file is required", i)
+			}
+		case "maildir":
+			if f.Path == "" {
+				return fmt.Errorf("feeders[%d]: path is required", i)
 			}
 		case "":
 			return fmt.Errorf("feeders[%d]: type is required", i)

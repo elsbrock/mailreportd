@@ -107,6 +107,11 @@ func TestValidation(t *testing.T) {
 			want: "unknown type",
 		},
 		{
+			name: "maildir feeder without path",
+			yaml: minimal + "feeders:\n  - type: maildir\n",
+			want: "path is required",
+		},
+		{
 			name: "feeder naming an unknown tenant",
 			yaml: minimal + "feeders:\n  - type: imap\n    tenant: other\n    host: h\n    username: u\n    password_env: PW\n",
 			want: "unknown tenant",

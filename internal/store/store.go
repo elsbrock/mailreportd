@@ -369,6 +369,24 @@ func storeReport(ctx context.Context, tx *sql.Tx, tenant string, rawID int64, re
 	return true, nil
 }
 
+// SeenChecksum reports whether message bytes with this checksum are already
+// ingested. Feeders without an incremental cursor — maildir — use it to make a
+// full rescan cost a hash per file rather than a decode. It is an optimization
+// only: Ingest stays idempotent without it.
+func (s *Store) SeenChecksum(ctx context.Context, checksum string) (bool, error) {
+	var one int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT 1 FROM raw_report WHERE tenant_id = ? AND checksum = ?`,
+		s.tenant, checksum).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("check checksum: %w", err)
+	}
+	return true, nil
+}
+
 // Cursor is a feeder's position in a mailbox.
 type Cursor struct {
 	UIDValidity uint32
