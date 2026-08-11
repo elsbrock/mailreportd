@@ -158,7 +158,7 @@
 					name: 'JSON read API',
 					standard: '—',
 					status: 'supported',
-					note: 'The per-source detail that must never become a label.'
+					note: 'Per-source and per-signer detail that is too high-cardinality for metric labels.'
 				}
 			]
 		}
@@ -309,8 +309,8 @@
 							Self-hosted mail observability
 						</p>
 
-						<h1 class="mt-6 text-4xl font-semibold leading-[1.1] tracking-tight text-ink sm:text-5xl lg:text-[3.4rem]">
-							Prometheus metrics from the mail reports
+						<h1 class="mt-6 text-4xl font-semibold leading-[1.1] tracking-tight text-ink sm:text-5xl">
+							<span class="block text-balance">Prometheus metrics from the mail reports</span>
 							<span class="block text-accent">you already receive.</span>
 						</h1>
 
@@ -502,6 +502,13 @@
 						are classified into three buckets before anything is exported, and the per-address detail
 						is served over a JSON API on the private listener instead.
 					</p>
+					<p class="mt-4 leading-relaxed text-ink-muted">
+						DKIM signing domains follow the same rule, because whoever sends the mail chooses them.
+						<span class="font-mono text-[0.9em] text-ink">/api/v1/signers</span> aggregates them in the
+						store, keyed by signing domain and selector, and shows verification and alignment
+						separately: a relay signing under its own domain verifies fine while contributing nothing
+						to DMARC.
+					</p>
 					<p class="mt-4 flex items-start gap-2.5 rounded-lg border border-pass/30 bg-pass-soft px-4 py-3 text-sm text-ink">
 						<svg viewBox="0 0 20 20" class="mt-0.5 size-4 shrink-0 text-pass" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
 							<path d="m4 10.5 4 4 8-9" />
@@ -646,8 +653,8 @@
 				<div class="mt-16">
 					<h3 class="text-lg font-semibold text-ink">Two listeners</h3>
 					<p class="mt-3 max-w-2xl leading-relaxed text-ink-muted">
-						The read API exposes source addresses and reporter identities, which together reveal your
-						sending topology. That is why it runs on the private listener only.
+						The read API exposes source addresses, signing domains, and reporter identities, which
+						together reveal your sending topology. That is why it runs on the private listener only.
 					</p>
 
 					<div class="mt-6 grid gap-6 md:grid-cols-2">

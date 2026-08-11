@@ -55,6 +55,7 @@ export const endpoints = {
 		{ method: 'GET', path: '/metrics' },
 		{ method: 'GET', path: '/api/v1/domains' },
 		{ method: 'GET', path: '/api/v1/sources' },
+		{ method: 'GET', path: '/api/v1/signers' },
 		{ method: 'GET', path: '/api/v1/quarantine' }
 	]
 } as const;
