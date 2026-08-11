@@ -73,14 +73,14 @@
 				{
 					name: 'SMTP TLS reports, over HTTPS',
 					standard: 'RFC 8460',
-					status: 'planned',
-					note: 'Some reporters submit to an endpoint rather than to a mailbox.'
+					status: 'supported',
+					note: 'POST /tlsrpt on the public listener, off by default. Enable it when your TLS-RPT record publishes an https rua.'
 				},
 				{
 					name: 'DMARC failure reports',
 					standard: 'RFC 6591',
-					status: 'planned',
-					note: 'Carries recipient addresses and message content, so it needs encryption at rest, a shorter retention and access logging before it ships.'
+					status: 'supported',
+					note: 'The content is recipient PII, so it is encrypted at rest with a key you provide, kept seven days, and every content read is access-logged. Without a key, only the envelope is stored.'
 				}
 			]
 		},
@@ -145,8 +145,8 @@
 				{
 					name: 'Maildir',
 					standard: '—',
-					status: 'planned',
-					note: 'For deployments that deliver locally instead of exposing IMAP.'
+					status: 'supported',
+					note: 'For deployments that deliver locally instead of exposing IMAP. Reads new/ and cur/; never renames, moves or deletes a file.'
 				},
 				{
 					name: 'Prometheus exposition',

@@ -50,12 +50,16 @@ export const metricRows = [
 ] as const;
 
 export const endpoints = {
-	public: [{ method: 'GET', path: '/healthz' }],
+	public: [
+		{ method: 'GET', path: '/healthz' },
+		{ method: 'POST', path: '/tlsrpt' }
+	],
 	private: [
 		{ method: 'GET', path: '/metrics' },
 		{ method: 'GET', path: '/api/v1/domains' },
 		{ method: 'GET', path: '/api/v1/sources' },
 		{ method: 'GET', path: '/api/v1/signers' },
+		{ method: 'GET', path: '/api/v1/failures' },
 		{ method: 'GET', path: '/api/v1/quarantine' }
 	]
 } as const;
