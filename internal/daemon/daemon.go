@@ -27,6 +27,7 @@ import (
 	"github.com/elsbrock/mailreportd/internal/metrics"
 	"github.com/elsbrock/mailreportd/internal/policy"
 	"github.com/elsbrock/mailreportd/internal/store"
+	"github.com/elsbrock/mailreportd/internal/submit"
 )
 
 // Options are injection points for tests. Every field is optional and the zero
@@ -131,14 +132,23 @@ func (d *Daemon) Feeders() []feeder.Feeder { return d.feeders }
 // Refresh rebuilds the metric snapshot.
 func (d *Daemon) Refresh(ctx context.Context) { d.collector.Refresh(ctx) }
 
-// PublicMux carries anything an outside party may reach. Today that is only the
-// liveness probe; TLS-RPT HTTPS submission lands here later.
+// PublicMux carries anything an outside party may reach: the liveness probe,
+// and TLS-RPT submission when the operator has enabled it.
 func (d *Daemon) PublicMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		fmt.Fprintln(w, "ok")
 	})
+	if d.cfg.HTTP.TLSRPTSubmission {
+		domains := make(map[string]string)
+		for _, t := range d.cfg.Tenants {
+			for _, dom := range t.Domains {
+				domains[dom] = t.ID
+			}
+		}
+		submit.NewTLSRPT(d.stores, domains, d.log).Register(mux)
+	}
 	return mux
 }
 

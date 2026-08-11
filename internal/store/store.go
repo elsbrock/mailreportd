@@ -369,6 +369,45 @@ func storeReport(ctx context.Context, tx *sql.Tx, tenant string, rawID int64, re
 	return true, nil
 }
 
+// IngestReport stores one already-parsed report together with its source
+// bytes, for submission paths that arrive without a mail envelope. It shares
+// both dedupe levels with Ingest: identical bytes by checksum, identical
+// reports by identity.
+func (s *Store) IngestReport(ctx context.Context, msg RawMessage, rep *report.Report) (IngestResult, error) {
+	var res IngestResult
+	if msg.Received.IsZero() {
+		msg.Received = time.Now()
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return res, fmt.Errorf("begin ingest: %w", err)
+	}
+	defer tx.Rollback()
+
+	rawID, inserted, err := insertRaw(ctx, tx, s.tenant, msg, StateParsed, "", nil)
+	if err != nil {
+		return res, err
+	}
+	if !inserted {
+		res.Duplicate = true
+		res.State = StateParsed
+		return res, tx.Commit()
+	}
+
+	stored, err := storeReport(ctx, tx, s.tenant, rawID, rep)
+	if err != nil {
+		return res, err
+	}
+	if stored {
+		res.Stored++
+	} else {
+		res.Skipped++
+	}
+	res.State = StateParsed
+	return res, tx.Commit()
+}
+
 // SeenChecksum reports whether message bytes with this checksum are already
 // ingested. Feeders without an incremental cursor — maildir — use it to make a
 // full rescan cost a hash per file rather than a decode. It is an optimization

@@ -71,6 +71,24 @@ func ParseTLSRPT(data []byte) (*Report, error) {
 	return rep, nil
 }
 
+// ParseTLSRPTSubmission parses one HTTPS-submitted report body per RFC 8460
+// §5.3: the payload alone, optionally gzipped, with no mail envelope around it.
+// Compression is sniffed rather than read from Content-Type, as everywhere
+// else: labels are conventional.
+func ParseTLSRPTSubmission(body []byte) (*Report, error) {
+	if isGzip(body) {
+		data, err := gunzip(body)
+		if err != nil {
+			return nil, fmt.Errorf("decompress submission: %w", err)
+		}
+		body = data
+	}
+	if !looksLikeTLSRPT(body) {
+		return nil, fmt.Errorf("body is not an RFC 8460 report")
+	}
+	return ParseTLSRPT(body)
+}
+
 // Domains lists every distinct policy domain covered by a TLS report.
 func (r *Report) Domains() []string {
 	if r.Format != FormatTLSRPT {

@@ -41,6 +41,10 @@ type Log struct {
 type HTTP struct {
 	Listen        string `yaml:"listen"`
 	MetricsListen string `yaml:"metrics_listen"`
+	// TLSRPTSubmission enables POST /tlsrpt on the public listener. Off by
+	// default: an operator who has not published an HTTPS rua should not be
+	// running an open write endpoint just because the binary can.
+	TLSRPTSubmission bool `yaml:"tlsrpt_submission"`
 }
 
 // Storage describes the embedded database and how long each class of report is

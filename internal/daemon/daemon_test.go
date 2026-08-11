@@ -336,6 +336,59 @@ func TestRunStartsAndStopsCleanly(t *testing.T) {
 	}
 }
 
+// TestTLSRPTSubmissionGate: /tlsrpt exists on the public listener only when
+// the operator enabled it, and an enabled endpoint stores what it accepts.
+func TestTLSRPTSubmissionGate(t *testing.T) {
+	// Default harness: submission off, the path must not exist.
+	h := newHarness(t)
+	resp, err := http.Post(h.public.URL+"/tlsrpt", "application/tlsrpt+json",
+		strings.NewReader(imaptest.TLSJSON("t-off", "example.org", 5, 0)))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("disabled endpoint answered %d, want 404", resp.StatusCode)
+	}
+
+	// Enabled: the same POST lands in the store.
+	cfg, err := config.Parse([]byte(fmt.Sprintf(`
+log:
+  level: error
+http:
+  tlsrpt_submission: true
+storage:
+  path: %q
+tenants:
+  - id: default
+    domains: [example.org]
+`, filepath.Join(t.TempDir(), "submit.db"))))
+	if err != nil {
+		t.Fatalf("config: %v", err)
+	}
+	d, err := New(cfg, quiet(), Options{Version: "test"})
+	if err != nil {
+		t.Fatalf("assemble daemon: %v", err)
+	}
+	t.Cleanup(func() { d.Close() })
+	public := httptest.NewServer(d.PublicMux())
+	t.Cleanup(public.Close)
+
+	resp, err = http.Post(public.URL+"/tlsrpt", "application/tlsrpt+json",
+		strings.NewReader(imaptest.TLSJSON("t-on", "example.org", 7, 1)))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("enabled endpoint answered %d, want 201", resp.StatusCode)
+	}
+	tls, err := d.Stores()["default"].TLSSummaries(context.Background(), time.Now().Add(-30*24*time.Hour))
+	if err != nil || len(tls) != 1 || tls[0].Successful != 7 || tls[0].Failed != 1 {
+		t.Fatalf("tls summaries = %+v err = %v", tls, err)
+	}
+}
+
 func mustGet(t *testing.T, h *harness) string {
 	t.Helper()
 	_, body := h.get(t, h.private, "/api/v1/domains")
