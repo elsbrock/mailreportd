@@ -21,15 +21,15 @@ func feederConfig(t *testing.T, m *imaptest.Mailbox, name, tenant string) IMAPCo
 	host, port := m.HostPort(t)
 	username, password := m.Credentials()
 	return IMAPConfig{
-		Name:     name,
-		Tenant:   tenant,
-		Host:     host,
-		Port:     port,
-		Username: username,
-		Password: password,
-		Mailbox:  "INBOX",
-		Interval: time.Minute,
-		Insecure: true,
+		Name:      name,
+		Tenant:    tenant,
+		Host:      host,
+		Port:      port,
+		Username:  username,
+		Password:  password,
+		Mailboxes: []string{"INBOX"},
+		Interval:  time.Minute,
+		Insecure:  true,
 	}
 }
 
@@ -170,7 +170,7 @@ func TestIMAPFeederIsIdempotentAcrossCursorReset(t *testing.T) {
 
 	// Simulate a UIDVALIDITY change, or an operator wiping the cursor to force
 	// a rescan. The whole mailbox is reprocessed and nothing is double counted.
-	if err := s.SetCursor(ctx, "mailbox", store.Cursor{}); err != nil {
+	if err := s.SetCursor(ctx, "mailbox/INBOX", store.Cursor{}); err != nil {
 		t.Fatalf("reset cursor: %v", err)
 	}
 
@@ -214,6 +214,140 @@ func TestIMAPFeederCountsResentReportsAsDuplicates(t *testing.T) {
 	}
 	if stats.Duplicate != 1 {
 		t.Errorf("duplicate = %d, want 1: the resent report must count as a duplicate", stats.Duplicate)
+	}
+}
+
+func TestIMAPFeederReadsJunkBySpecialUse(t *testing.T) {
+	mailbox := imaptest.NewMailbox(t)
+	s := testStore(t)
+	ctx := context.Background()
+
+	// Stalwart's spam filter filed real reports under "Junk Mail". The name is
+	// server-specific; the \Junk attribute is not.
+	mailbox.CreateMailbox(t, "Junk Mail", imap.MailboxAttrJunk)
+	mailbox.CreateMailbox(t, "Archive", imap.MailboxAttrArchive)
+	mailbox.Deliver(t, imaptest.ReportMail(t, "r1", "a.xml.gz", imaptest.AggregateXML("report-a", "example.org", 10, 1)))
+	mailbox.DeliverTo(t, "Junk Mail", imaptest.ReportMail(t, "r2", "b.xml.gz", imaptest.AggregateXML("report-b", "example.org", 20, 2)))
+	mailbox.DeliverTo(t, "Archive", imaptest.ReportMail(t, "r3", "c.xml.gz", imaptest.AggregateXML("report-c", "example.org", 40, 4)))
+
+	cfg := feederConfig(t, mailbox, "mailbox", "default")
+	cfg.IncludeJunk = true
+
+	stats, err := NewIMAP(cfg, s, quietLogger()).Run(ctx)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if stats.Messages != 2 || stats.Reports != 2 {
+		t.Errorf("stats = %+v, want INBOX and Junk only", stats)
+	}
+
+	// Each mailbox keeps its own position: a second pass fetches nothing.
+	stats, err = NewIMAP(cfg, s, quietLogger()).Run(ctx)
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if stats.Messages != 0 {
+		t.Errorf("second run fetched %d messages, want 0", stats.Messages)
+	}
+
+	mailbox.DeliverTo(t, "Junk Mail", imaptest.ReportMail(t, "r4", "d.xml.gz", imaptest.AggregateXML("report-d", "example.org", 80, 8)))
+	stats, err = NewIMAP(cfg, s, quietLogger()).Run(ctx)
+	if err != nil {
+		t.Fatalf("third run: %v", err)
+	}
+	if stats.Messages != 1 || stats.Reports != 1 {
+		t.Errorf("third run stats = %+v, want only the new junk message", stats)
+	}
+}
+
+func TestIMAPFeederJunkIsOptOut(t *testing.T) {
+	mailbox := imaptest.NewMailbox(t)
+	s := testStore(t)
+
+	mailbox.CreateMailbox(t, "Junk", imap.MailboxAttrJunk)
+	mailbox.DeliverTo(t, "Junk", imaptest.ReportMail(t, "r1", "a.xml.gz", imaptest.AggregateXML("report-a", "example.org", 10, 1)))
+
+	cfg := feederConfig(t, mailbox, "mailbox", "default")
+	cfg.IncludeJunk = false
+
+	stats, err := NewIMAP(cfg, s, quietLogger()).Run(context.Background())
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if stats.Messages != 0 {
+		t.Errorf("fetched %d messages from junk with include_junk off", stats.Messages)
+	}
+}
+
+func TestIMAPFeederReadsListedMailboxesOnce(t *testing.T) {
+	mailbox := imaptest.NewMailbox(t)
+	s := testStore(t)
+
+	mailbox.CreateMailbox(t, "Junk", imap.MailboxAttrJunk)
+	mailbox.CreateMailbox(t, "Reports")
+	mailbox.DeliverTo(t, "Reports", imaptest.ReportMail(t, "r1", "a.xml.gz", imaptest.AggregateXML("report-a", "example.org", 10, 1)))
+	mailbox.DeliverTo(t, "Junk", imaptest.ReportMail(t, "r2", "b.xml.gz", imaptest.AggregateXML("report-b", "example.org", 20, 2)))
+
+	// Junk is both listed and discovered; it must be read once, not twice.
+	cfg := feederConfig(t, mailbox, "mailbox", "default")
+	cfg.Mailboxes = []string{"INBOX", "Reports", "Junk"}
+	cfg.IncludeJunk = true
+
+	stats, err := NewIMAP(cfg, s, quietLogger()).Run(context.Background())
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if stats.Messages != 2 || stats.Duplicate != 0 {
+		t.Errorf("stats = %+v, want 2 messages and no duplicates", stats)
+	}
+}
+
+func TestIMAPFeederKeepsLegacyCursor(t *testing.T) {
+	mailbox := imaptest.NewMailbox(t)
+	s := testStore(t)
+	ctx := context.Background()
+
+	mailbox.Deliver(t, imaptest.ReportMail(t, "r1", "a.xml.gz", imaptest.AggregateXML("report-a", "example.org", 10, 1)))
+	mailbox.Deliver(t, imaptest.ReportMail(t, "r2", "b.xml.gz", imaptest.AggregateXML("report-b", "example.org", 20, 2)))
+
+	// Stand in for a single-mailbox release, which keyed the cursor by the
+	// bare feeder name.
+	if _, err := NewIMAP(feederConfig(t, mailbox, "scratch", "default"), s, quietLogger()).Run(ctx); err != nil {
+		t.Fatalf("seed run: %v", err)
+	}
+	legacy, err := s.Cursor(ctx, "scratch/INBOX")
+	if err != nil {
+		t.Fatalf("read cursor: %v", err)
+	}
+	if err := s.SetCursor(ctx, "mailbox", legacy); err != nil {
+		t.Fatalf("write legacy cursor: %v", err)
+	}
+
+	// Upgrading must not refetch the primary mailbox from UID 1.
+	stats, err := NewIMAP(feederConfig(t, mailbox, "mailbox", "default"), s, quietLogger()).Run(ctx)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if stats.Messages != 0 {
+		t.Errorf("fetched %d messages; the legacy cursor was not adopted", stats.Messages)
+	}
+	if c, _ := s.Cursor(ctx, "mailbox/INBOX"); c != legacy {
+		t.Errorf("cursor = %+v, want %+v under the per-mailbox key", c, legacy)
+	}
+
+	// Clearing the new row must force a rescan, not re-adopt the old one.
+	if c, _ := s.Cursor(ctx, "mailbox"); c != (store.Cursor{}) {
+		t.Errorf("legacy cursor = %+v, want it removed after adoption", c)
+	}
+	if err := s.SetCursor(ctx, "mailbox/INBOX", store.Cursor{}); err != nil {
+		t.Fatalf("reset cursor: %v", err)
+	}
+	stats, err = NewIMAP(feederConfig(t, mailbox, "mailbox", "default"), s, quietLogger()).Run(ctx)
+	if err != nil {
+		t.Fatalf("rescan: %v", err)
+	}
+	if stats.Messages != 2 {
+		t.Errorf("rescan fetched %d messages, want 2", stats.Messages)
 	}
 }
 

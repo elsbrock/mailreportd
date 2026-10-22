@@ -312,15 +312,16 @@ func buildFeeders(cfg *config.Config, stores map[string]*store.Store, log *slog.
 				return nil, fmt.Errorf("feeders[%d]: credential is empty", i)
 			}
 			out = append(out, feeder.NewIMAP(feeder.IMAPConfig{
-				Name:     f.Name,
-				Tenant:   f.Tenant,
-				Host:     f.Host,
-				Port:     f.Port,
-				Username: f.Username,
-				Password: password,
-				Mailbox:  f.Mailbox,
-				Interval: f.Interval,
-				Insecure: f.Insecure,
+				Name:        f.Name,
+				Tenant:      f.Tenant,
+				Host:        f.Host,
+				Port:        f.Port,
+				Username:    f.Username,
+				Password:    password,
+				Mailboxes:   f.Mailboxes,
+				IncludeJunk: *f.IncludeJunk,
+				Interval:    f.Interval,
+				Insecure:    f.Insecure,
 			}, s, log))
 		case "maildir":
 			out = append(out, feeder.NewMaildir(feeder.MaildirConfig{

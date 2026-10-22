@@ -538,6 +538,16 @@ func (s *Store) SetCursor(ctx context.Context, feeder string, c Cursor) error {
 	return nil
 }
 
+// DeleteCursor forgets a feeder's position.
+func (s *Store) DeleteCursor(ctx context.Context, feeder string) error {
+	if _, err := s.db.ExecContext(ctx,
+		`DELETE FROM feeder_cursor WHERE tenant_id = ? AND feeder = ?`,
+		s.tenant, feeder); err != nil {
+		return fmt.Errorf("delete feeder cursor: %w", err)
+	}
+	return nil
+}
+
 // Retention holds per-class retention windows.
 type Retention struct {
 	Raw       time.Duration

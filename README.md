@@ -75,8 +75,11 @@ $ mailreportd -config config.yaml
 
 Copy `config.example.yaml` and point it at the mailbox your `rua=` address
 delivers to. The IMAP password is named by environment variable, never written
-in the file, so the file stays committable. A locally delivered maildir works
-in place of IMAP: `type: maildir` with a `path`. The feeder reads `new/` and
+in the file, so the file stays committable. The IMAP feeder reads `INBOX`
+plus whatever folder the server marks `\Junk` (RFC 6154), because spam
+filters regularly file reports there; set `include_junk: false` to skip it, or
+list folders explicitly with `mailboxes: [INBOX, Reports]`. A locally delivered
+maildir works in place of IMAP: `type: maildir` with a `path`. The feeder reads `new/` and
 `cur/` and never renames, moves or deletes a file.
 
 ## Endpoints
@@ -188,19 +191,22 @@ Two signals are worth waking someone for, and one explicitly is not.
 
 ## Operational notes
 
-- **Nothing in the mailbox is modified.** The feeder opens it read-only, peeks
-  rather than marking read, and tracks its own position. The mailbox stays
-  usable by a human or another tool.
+- **Nothing in the mailbox is modified.** The feeder opens each folder
+  read-only, peeks rather than marking read, and tracks its own position per
+  folder. Nothing is moved out of Junk. The mailbox stays usable by a human or
+  another tool.
 - **Ingest is idempotent** at two levels: identical message bytes by checksum,
   and the same report arriving under different envelopes by report identity.
   Reprocessing the whole mailbox is safe and is the supported recovery path —
-  clear the feeder's cursor row and restart.
+  clear the feeder's cursor rows (`<feeder>/<folder>`) and restart.
 - **Nothing is deleted because it failed to parse.** Unparseable reports go to
   quarantine with the error and the original bytes, and survive retention
   sweeps. Autoreplies and spam are recorded as ignored, not as failures, so
   quarantine stays a signal worth alerting on.
 - **Renaming a feeder makes it rescan** from the beginning, because the name is
-  its cursor key. Harmless, but it will re-download the mailbox.
+  part of its cursor key. Harmless, but it will re-download the mailbox.
+  Upgrading from a single-folder release keeps the existing cursor for the
+  first configured folder.
 
 ## Development
 

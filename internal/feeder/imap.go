@@ -3,9 +3,11 @@ package feeder
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
+	"slices"
 	"strconv"
 	"time"
 
@@ -19,7 +21,7 @@ import (
 // small, but a mailbox that has gone unread for a year is not.
 const fetchBatch = 32
 
-// IMAPConfig describes one mailbox to poll.
+// IMAPConfig describes one IMAP account to poll.
 type IMAPConfig struct {
 	Name     string
 	Tenant   string
@@ -27,32 +29,37 @@ type IMAPConfig struct {
 	Port     int
 	Username string
 	Password string
-	Mailbox  string
-	Interval time.Duration
+	// Mailboxes are read in order. The first one keeps the cursor of the
+	// former single-mailbox feeder, so upgrading does not rescan it.
+	Mailboxes []string
+	// IncludeJunk also reads the folder the server marks \Junk (RFC 6154),
+	// found by attribute rather than by name.
+	IncludeJunk bool
+	Interval    time.Duration
 	// Insecure disables TLS, for a local mailbox reached over a trusted
 	// transport. It is never the default.
 	Insecure bool
 }
 
-// IMAP polls a mailbox over IMAP.
+// IMAP polls one or more mailboxes of an account over IMAP.
 //
-// It opens the mailbox read-only and tracks its own position rather than
+// It opens each mailbox read-only and tracks its own position rather than
 // flagging, moving or deleting messages. The mailbox commonly belongs to a
 // human or is shared with another tool, and silently mutating it is a side
-// effect nobody asked for. The cost is one small row of state per feeder.
+// effect nobody asked for. The cost is one small row of state per mailbox.
 type IMAP struct {
 	cfg   IMAPConfig
 	store *store.Store
 	log   *slog.Logger
 }
 
-// NewIMAP returns a feeder for one mailbox.
+// NewIMAP returns a feeder for one account.
 func NewIMAP(cfg IMAPConfig, s *store.Store, log *slog.Logger) *IMAP {
 	if cfg.Port == 0 {
 		cfg.Port = 993
 	}
-	if cfg.Mailbox == "" {
-		cfg.Mailbox = "INBOX"
+	if len(cfg.Mailboxes) == 0 {
+		cfg.Mailboxes = []string{"INBOX"}
 	}
 	if cfg.Interval <= 0 {
 		cfg.Interval = 5 * time.Minute
@@ -67,7 +74,10 @@ func (f *IMAP) Name() string            { return f.cfg.Name }
 func (f *IMAP) Tenant() string          { return f.cfg.Tenant }
 func (f *IMAP) Interval() time.Duration { return f.cfg.Interval }
 
-// Run performs one poll.
+// Run performs one poll of every mailbox.
+//
+// A failing mailbox does not stop the others: a Junk folder that cannot be
+// selected must not cost the reports sitting in INBOX.
 func (f *IMAP) Run(ctx context.Context) (Stats, error) {
 	var stats Stats
 
@@ -85,14 +95,90 @@ func (f *IMAP) Run(ctx context.Context) (Stats, error) {
 	// any work happens.
 	defer func() { client.Logout().Wait() }()
 
-	selected, err := client.Select(f.cfg.Mailbox, &imap.SelectOptions{ReadOnly: true}).Wait()
-	if err != nil {
-		return stats, fmt.Errorf("select mailbox %q: %w", f.cfg.Mailbox, err)
+	var errs []error
+	mailboxes := f.cfg.Mailboxes
+	if f.cfg.IncludeJunk {
+		junk, err := junkMailbox(client)
+		switch {
+		case err != nil:
+			errs = append(errs, fmt.Errorf("find junk mailbox: %w", err))
+		case junk != "" && !slices.Contains(mailboxes, junk):
+			mailboxes = append(slices.Clip(mailboxes), junk)
+		}
 	}
 
-	cursor, err := f.store.Cursor(ctx, f.cfg.Name)
+	for _, mailbox := range mailboxes {
+		if err := ctx.Err(); err != nil {
+			return stats, err
+		}
+		if err := f.runMailbox(ctx, client, mailbox, &stats); err != nil {
+			errs = append(errs, fmt.Errorf("mailbox %q: %w", mailbox, err))
+		}
+	}
+	return stats, errors.Join(errs...)
+}
+
+// junkMailbox returns the name of the mailbox carrying the \Junk attribute, or
+// "" when the server marks none.
+func junkMailbox(client *imapclient.Client) (string, error) {
+	var options *imap.ListOptions
+	// Without the extension the attribute may still be returned, but asking
+	// for it is an error.
+	if client.Caps().Has(imap.CapSpecialUse) {
+		options = &imap.ListOptions{ReturnSpecialUse: true}
+	}
+	list, err := client.List("", "*", options).Collect()
 	if err != nil {
-		return stats, err
+		return "", err
+	}
+	for _, data := range list {
+		if slices.Contains(data.Attrs, imap.MailboxAttrJunk) {
+			return data.Mailbox, nil
+		}
+	}
+	return "", nil
+}
+
+// cursorKey names the stored cursor of one mailbox. The first configured
+// mailbox is the one a single-mailbox feeder used to read, keyed by the bare
+// feeder name; that row moves to the new key on first read.
+func (f *IMAP) cursorKey(mailbox string) string {
+	return f.cfg.Name + "/" + mailbox
+}
+
+func (f *IMAP) cursor(ctx context.Context, mailbox string) (store.Cursor, error) {
+	cursor, err := f.store.Cursor(ctx, f.cursorKey(mailbox))
+	if err != nil || cursor != (store.Cursor{}) || mailbox != f.cfg.Mailboxes[0] {
+		return cursor, err
+	}
+	// Adopted only for the first mailbox, which is where the old `mailbox`
+	// setting lands. If an upgrade also changed which folder that is, the
+	// UIDVALIDITY check below discards the cursor and rescans instead.
+	legacy, err := f.store.Cursor(ctx, f.cfg.Name)
+	if err != nil || legacy == (store.Cursor{}) {
+		return legacy, err
+	}
+	// Move it rather than copy it: a legacy row left behind would be adopted
+	// again after an operator clears the new one to force a rescan.
+	if err := f.store.SetCursor(ctx, f.cursorKey(mailbox), legacy); err != nil {
+		return store.Cursor{}, err
+	}
+	return legacy, f.store.DeleteCursor(ctx, f.cfg.Name)
+}
+
+// runMailbox polls one mailbox from its cursor.
+func (f *IMAP) runMailbox(ctx context.Context, client *imapclient.Client, mailbox string, stats *Stats) error {
+	log := f.log.With("mailbox", mailbox)
+	key := f.cursorKey(mailbox)
+
+	selected, err := client.Select(mailbox, &imap.SelectOptions{ReadOnly: true}).Wait()
+	if err != nil {
+		return fmt.Errorf("select: %w", err)
+	}
+
+	cursor, err := f.cursor(ctx, mailbox)
+	if err != nil {
+		return err
 	}
 
 	// A changed UIDVALIDITY means the server renumbered the mailbox and every
@@ -100,7 +186,7 @@ func (f *IMAP) Run(ctx context.Context) (Stats, error) {
 	// ingest deduplicates on message bytes, so nothing is counted twice.
 	if cursor.UIDValidity != selected.UIDValidity {
 		if cursor.UIDValidity != 0 {
-			f.log.Warn("mailbox uidvalidity changed, rescanning",
+			log.Warn("mailbox uidvalidity changed, rescanning",
 				"was", cursor.UIDValidity, "now", selected.UIDValidity)
 		}
 		cursor = store.Cursor{UIDValidity: selected.UIDValidity}
@@ -108,37 +194,37 @@ func (f *IMAP) Run(ctx context.Context) (Stats, error) {
 
 	uids, err := f.search(client, cursor.LastUID)
 	if err != nil {
-		return stats, err
+		return err
 	}
 	if len(uids) == 0 {
 		// Persist the cursor anyway: on a first run this records UIDVALIDITY so
 		// a later change is detectable.
-		return stats, f.store.SetCursor(ctx, f.cfg.Name, cursor)
+		return f.store.SetCursor(ctx, key, cursor)
 	}
 
-	f.log.Debug("fetching messages", "count", len(uids), "from_uid", cursor.LastUID+1)
+	log.Debug("fetching messages", "count", len(uids), "from_uid", cursor.LastUID+1)
 
 	for start := 0; start < len(uids); start += fetchBatch {
 		if err := ctx.Err(); err != nil {
-			return stats, err
+			return err
 		}
 		end := min(start+fetchBatch, len(uids))
 
-		highest, err := f.fetchBatch(ctx, client, uids[start:end], &stats)
+		highest, err := f.fetchBatch(ctx, client, mailbox, uids[start:end], stats)
 		if highest > cursor.LastUID {
 			cursor.LastUID = highest
 		}
 		if err != nil {
 			// Persist progress before returning: a mid-batch failure must not
 			// re-download everything on the next pass.
-			if cerr := f.store.SetCursor(ctx, f.cfg.Name, cursor); cerr != nil {
-				f.log.Error("persist cursor after fetch failure", "err", cerr)
+			if cerr := f.store.SetCursor(ctx, key, cursor); cerr != nil {
+				log.Error("persist cursor after fetch failure", "err", cerr)
 			}
-			return stats, err
+			return err
 		}
 	}
 
-	return stats, f.store.SetCursor(ctx, f.cfg.Name, cursor)
+	return f.store.SetCursor(ctx, key, cursor)
 }
 
 func (f *IMAP) dial() (*imapclient.Client, error) {
@@ -193,7 +279,7 @@ func (f *IMAP) search(client *imapclient.Client, lastUID uint32) ([]imap.UID, er
 
 // fetchBatch downloads and ingests one batch, returning the highest UID it got
 // through even when it later fails.
-func (f *IMAP) fetchBatch(ctx context.Context, client *imapclient.Client, uids []imap.UID, stats *Stats) (uint32, error) {
+func (f *IMAP) fetchBatch(ctx context.Context, client *imapclient.Client, mailbox string, uids []imap.UID, stats *Stats) (uint32, error) {
 	set := imap.UIDSetNum(uids...)
 	options := &imap.FetchOptions{
 		UID:          true,
@@ -227,7 +313,7 @@ func (f *IMAP) fetchBatch(ctx context.Context, client *imapclient.Client, uids [
 
 		res, err := f.store.Ingest(ctx, store.RawMessage{
 			Feeder:    f.cfg.Name,
-			SourceRef: fmt.Sprintf("uid:%d", msg.UID),
+			SourceRef: fmt.Sprintf("%s uid:%d", mailbox, msg.UID),
 			Received:  received,
 			Body:      body,
 		})

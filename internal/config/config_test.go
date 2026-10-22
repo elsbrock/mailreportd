@@ -50,8 +50,16 @@ feeders:
 	}
 
 	f := cfg.Feeders[0]
-	if f.Port != 993 || f.Mailbox != "INBOX" || f.Interval != 5*time.Minute {
+	if f.Port != 993 || f.Interval != 5*time.Minute {
 		t.Errorf("feeder = %+v", f)
+	}
+	if len(f.Mailboxes) != 1 || f.Mailboxes[0] != "INBOX" {
+		t.Errorf("mailboxes = %v, want [INBOX]", f.Mailboxes)
+	}
+	// Spam filters file reports under Junk; reading it must not depend on the
+	// operator knowing that.
+	if f.IncludeJunk == nil || !*f.IncludeJunk {
+		t.Error("the \\Junk folder should be read by default")
 	}
 	// A single tenant should not have to be named on every feeder.
 	if f.Tenant != "default" {
@@ -62,6 +70,39 @@ feeders:
 	}
 	if f.Insecure {
 		t.Error("TLS must never be off by default")
+	}
+}
+
+func TestFeederMailboxes(t *testing.T) {
+	cfg, err := Parse([]byte(minimal + `
+feeders:
+  - type: imap
+    name: legacy
+    host: mail.example.org
+    username: dmarc@example.org
+    password_env: PW
+    mailbox: Reports
+  - type: imap
+    name: listed
+    host: mail.example.org
+    username: dmarc@example.org
+    password_env: PW
+    mailboxes: [INBOX, Reports]
+    include_junk: false
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	legacy, listed := cfg.Feeders[0], cfg.Feeders[1]
+	if len(legacy.Mailboxes) != 1 || legacy.Mailboxes[0] != "Reports" {
+		t.Errorf("legacy mailboxes = %v, want [Reports]: mailbox must keep working", legacy.Mailboxes)
+	}
+	if len(listed.Mailboxes) != 2 || listed.Mailboxes[1] != "Reports" {
+		t.Errorf("listed mailboxes = %v", listed.Mailboxes)
+	}
+	if listed.IncludeJunk == nil || *listed.IncludeJunk {
+		t.Error("include_junk: false must opt out")
 	}
 }
 
@@ -100,6 +141,16 @@ func TestValidation(t *testing.T) {
 			name: "feeder without any credential",
 			yaml: minimal + "feeders:\n  - type: imap\n    host: h\n    username: u\n",
 			want: "password_env or password_file",
+		},
+		{
+			name: "feeder with mailbox and mailboxes",
+			yaml: minimal + "feeders:\n  - type: imap\n    host: h\n    username: u\n    password_env: PW\n    mailbox: INBOX\n    mailboxes: [Reports]\n",
+			want: "not both",
+		},
+		{
+			name: "feeder with duplicate mailbox",
+			yaml: minimal + "feeders:\n  - type: imap\n    host: h\n    username: u\n    password_env: PW\n    mailboxes: [INBOX, INBOX]\n",
+			want: "duplicate mailbox",
 		},
 		{
 			name: "unknown feeder type",

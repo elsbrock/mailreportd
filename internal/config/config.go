@@ -143,10 +143,17 @@ type Feeder struct {
 	// delivers it via LoadCredential. Preferred over the environment: a
 	// process environment is readable from /proc and tends to end up in crash
 	// dumps and child processes.
-	PasswordFile string        `yaml:"password_file"`
-	Mailbox      string        `yaml:"mailbox"`
-	Interval     time.Duration `yaml:"interval"`
-	Insecure     bool          `yaml:"insecure"`
+	PasswordFile string `yaml:"password_file"`
+	// Mailbox is the single-folder form, kept for existing configs.
+	// Mailboxes replaces it; setting both is an error.
+	Mailbox   string   `yaml:"mailbox"`
+	Mailboxes []string `yaml:"mailboxes"`
+	// IncludeJunk also reads the folder the server marks \Junk (RFC 6154).
+	// Spam filters routinely file reports there, and a report that is never
+	// read is indistinguishable from a quiet week. Defaults to true.
+	IncludeJunk *bool         `yaml:"include_junk"`
+	Interval    time.Duration `yaml:"interval"`
+	Insecure    bool          `yaml:"insecure"`
 }
 
 // Password resolves the feeder credential. Credentials are never read from the
@@ -251,8 +258,16 @@ func (c *Config) applyDefaults() {
 			if f.Port == 0 {
 				f.Port = 993
 			}
-			if f.Mailbox == "" {
-				f.Mailbox = "INBOX"
+			if len(f.Mailboxes) == 0 {
+				mailbox := f.Mailbox
+				if mailbox == "" {
+					mailbox = "INBOX"
+				}
+				f.Mailboxes = []string{mailbox}
+			}
+			if f.IncludeJunk == nil {
+				junk := true
+				f.IncludeJunk = &junk
 			}
 		}
 		if f.Type == "imap" || f.Type == "maildir" {
@@ -317,6 +332,21 @@ func (c *Config) validate() error {
 			}
 			if f.PasswordEnv == "" && f.PasswordFile == "" {
 				return fmt.Errorf("feeders[%d]: one of password_env or password_file is required", i)
+			}
+			// Defaults copy mailbox into mailboxes, so anything else means
+			// both were set.
+			if f.Mailbox != "" && (len(f.Mailboxes) != 1 || f.Mailboxes[0] != f.Mailbox) {
+				return fmt.Errorf("feeders[%d]: set mailbox or mailboxes, not both", i)
+			}
+			seenMailbox := make(map[string]bool, len(f.Mailboxes))
+			for _, m := range f.Mailboxes {
+				if m == "" {
+					return fmt.Errorf("feeders[%d]: mailboxes must not contain an empty name", i)
+				}
+				if seenMailbox[m] {
+					return fmt.Errorf("feeders[%d]: duplicate mailbox %q", i, m)
+				}
+				seenMailbox[m] = true
 			}
 		case "maildir":
 			if f.Path == "" {

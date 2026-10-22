@@ -57,7 +57,11 @@ feeders:
     # supervisor provides one, e.g. systemd LoadCredential.
     password_env: MAILREPORTD_IMAP_PASSWORD
     # password_file: /run/credentials/mailreportd.service/imap-password
-    mailbox: INBOX
+    # Folders to read, in order. `mailbox: INBOX` still works for one.
+    mailboxes: [INBOX]
+    # Also read the folder the server marks \Junk (RFC 6154), whatever it is
+    # called. Spam filters file reports there. Read-only, like every folder.
+    include_junk: true
     interval: 5m
   # A locally delivered maildir works in place of IMAP. The feeder reads
   # new/ and cur/ and never renames, moves or deletes a file.

@@ -15,10 +15,13 @@ import (
 	"io"
 	"log"
 	"net"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
 	"github.com/emersion/go-imap/v2/imapserver"
 	"github.com/emersion/go-imap/v2/imapserver/imapmemserver"
@@ -35,6 +38,14 @@ type Mailbox struct {
 	user     *imapmemserver.User
 	username string
 	password string
+
+	mu      sync.Mutex
+	folders []folder // in creation order, INBOX first
+}
+
+type folder struct {
+	name       string
+	specialUse []imap.MailboxAttr
 }
 
 func NewMailbox(t *testing.T) *Mailbox {
@@ -54,10 +65,20 @@ func NewMailbox(t *testing.T) *Mailbox {
 	memServer := imapmemserver.New()
 	memServer.AddUser(user)
 
+	m := &Mailbox{
+		user:     user,
+		username: username,
+		password: password,
+		folders:  []folder{{name: mailbox}},
+	}
+
 	server := imapserver.New(&imapserver.Options{
 		NewSession: func(*imapserver.Conn) (imapserver.Session, *imapserver.GreetingData, error) {
-			return memServer.NewSession(), nil, nil
+			return &session{Session: memServer.NewSession(), mailbox: m}, nil, nil
 		},
+		// SPECIAL-USE as well, because real servers such as Stalwart
+		// advertise it and the feeder finds \Junk through it.
+		Caps: imap.CapSet{imap.CapIMAP4rev1: {}, imap.CapSpecialUse: {}, imap.CapCreateSpecialUse: {}},
 		// The test connects over loopback without TLS.
 		InsecureAuth: true,
 		Logger:       log.New(io.Discard, "", 0),
@@ -73,12 +94,8 @@ func NewMailbox(t *testing.T) *Mailbox {
 		listener.Close()
 	})
 
-	return &Mailbox{
-		addr:     listener.Addr().String(),
-		user:     user,
-		username: username,
-		password: password,
-	}
+	m.addr = listener.Addr().String()
+	return m
 }
 
 func (m *Mailbox) HostPort(t *testing.T) (string, int) {
@@ -94,8 +111,62 @@ func (m *Mailbox) HostPort(t *testing.T) (string, int) {
 	return host, n
 }
 
+// CreateMailbox adds a folder, optionally marked with RFC 6154 special-use
+// attributes such as \Junk.
+func (m *Mailbox) CreateMailbox(t *testing.T, name string, specialUse ...imap.MailboxAttr) {
+	t.Helper()
+	if err := m.user.Create(name, &imap.CreateOptions{SpecialUse: specialUse}); err != nil {
+		t.Fatalf("create mailbox %q: %v", name, err)
+	}
+	m.mu.Lock()
+	m.folders = append(m.folders, folder{name: name, specialUse: specialUse})
+	m.mu.Unlock()
+}
+
+// session answers LIST itself, because imapmemserver (v2.0.0-beta.8) drops the
+// special-use attributes given at create time. Everything else is the real
+// server.
+type session struct {
+	imapserver.Session
+	mailbox *Mailbox
+}
+
+func (s *session) List(w *imapserver.ListWriter, ref string, patterns []string, options *imap.ListOptions) error {
+	if len(patterns) == 0 {
+		return w.WriteList(&imap.ListData{Attrs: []imap.MailboxAttr{imap.MailboxAttrNoSelect}, Delim: '/'})
+	}
+
+	s.mailbox.mu.Lock()
+	folders := slices.Clone(s.mailbox.folders)
+	s.mailbox.mu.Unlock()
+
+	for _, f := range folders {
+		if !slices.ContainsFunc(patterns, func(p string) bool { return imapserver.MatchList(f.name, '/', ref, p) }) {
+			continue
+		}
+		if options.SelectSpecialUse && len(f.specialUse) == 0 {
+			continue
+		}
+		data := &imap.ListData{Mailbox: f.name, Delim: '/'}
+		if options.ReturnSpecialUse || options.SelectSpecialUse {
+			data.Attrs = f.specialUse
+		}
+		if err := w.WriteList(data); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // deliver appends a message to the mailbox over the wire, as a real MTA would.
 func (m *Mailbox) Deliver(t *testing.T, body []byte) {
+	t.Helper()
+	m.DeliverTo(t, "INBOX", body)
+}
+
+// DeliverTo appends a message to a named folder, as a spam filter filing a
+// report would.
+func (m *Mailbox) DeliverTo(t *testing.T, mailbox string, body []byte) {
 	t.Helper()
 
 	client, err := imapclient.DialInsecure(m.addr, nil)
@@ -108,7 +179,7 @@ func (m *Mailbox) Deliver(t *testing.T, body []byte) {
 		t.Fatalf("login: %v", err)
 	}
 
-	cmd := client.Append("INBOX", int64(len(body)), nil)
+	cmd := client.Append(mailbox, int64(len(body)), nil)
 	if _, err := cmd.Write(body); err != nil {
 		t.Fatalf("append write: %v", err)
 	}
