@@ -7,7 +7,7 @@
 // views answer different questions and neither substitutes for the other.
 //
 // Everything here reads public DNS and public HTTPS and nothing else. No MTA
-// API, no provider API, no privileged access. See docs/specs/policy-health.md.
+// API, no provider API, no privileged access.
 package policy
 
 import (

@@ -28,7 +28,7 @@ Tell me, through the alerting I already have, when:
 
 - A web UI or dashboard of its own. Grafana or the JSON API covers that.
 - Hosted service, accounts, billing.
-- DANE and BIMI checks (see `docs/specs/policy-health.md`).
+- DANE and BIMI checks.
 - Integrations with specific MTAs or delivery providers.
 
 ## Alternatives a user will weigh

@@ -12,8 +12,6 @@ documentation fixes, and code.
   on the approach before you write code.
 - Read [`PRODUCT.md`](PRODUCT.md) for the scope and non-goals. Changes that add a
   web UI or depend on a specific MTA or mail provider are out of scope.
-- Read the design records in [`docs/specs/`](docs/specs/). If your change
-  conflicts with one, update the record in the same pull request and explain why.
 
 ## Report samples
 

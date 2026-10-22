@@ -28,8 +28,8 @@ Website: <https://mailreportd.iodev.org>
 - Encrypts failure report content at rest.
 - Never modifies the mailbox.
 
-mailreportd doesn't include a web UI, and it doesn't check DANE or BIMI. See
-[`docs/specs/policy-health.md`](docs/specs/policy-health.md) for the reasons.
+mailreportd doesn't include a web UI. It doesn't check DANE, which requires a
+validating DNS resolver, or BIMI, which doesn't affect delivery.
 
 ## Install
 
@@ -272,8 +272,6 @@ nix build    # builds and runs the tests
 
 The end-to-end tests run a real IMAP server and check the output of `/metrics`
 and the JSON API.
-
-Design records are in [`docs/specs/`](docs/specs/).
 
 ## Contributing
 
