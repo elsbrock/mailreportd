@@ -80,7 +80,7 @@ func TestExpandIPMechanisms(t *testing.T) {
 
 func TestExpandIncludeAndRedirect(t *testing.T) {
 	r := &fakeResolver{txt: map[string][]string{
-		"example.org":           {"v=spf1 include:_spf.relay.example ip4:203.0.113.1 -all"},
+		"example.org":         {"v=spf1 include:_spf.relay.example ip4:203.0.113.1 -all"},
 		"_spf.relay.example":  {"v=spf1 ip4:192.0.2.0/24 redirect=_deep.relay.example"},
 		"_deep.relay.example": {"v=spf1 ip4:198.51.100.0/24 -all"},
 	}}
@@ -106,7 +106,7 @@ func TestExpandAAndMX(t *testing.T) {
 		ip: map[string][]net.IP{
 			"example.org":      {net.ParseIP("203.0.113.10")},
 			"mail.example.org": {net.ParseIP("2001:db8:98c0::103")},
-			"relay.example":  {net.ParseIP("192.0.2.77")},
+			"relay.example":    {net.ParseIP("192.0.2.77")},
 		},
 		mx: map[string][]*net.MX{
 			"example.org": {{Host: "mail.example.org.", Pref: 10}},
@@ -138,7 +138,7 @@ func TestNonPassQualifiersDoNotAuthorize(t *testing.T) {
 	// spoofer be classified as one of ours.
 	r := &fakeResolver{txt: map[string][]string{
 		"example.org": {"v=spf1 -ip4:203.0.113.0/24 ~ip4:192.0.2.0/24 ?a:x.example +ip4:198.51.100.0/24 -all"},
-		"x.example": {"v=spf1 -all"},
+		"x.example":   {"v=spf1 -all"},
 	}}
 
 	exp := New(r, 0, nil).Expand(context.Background(), "example.org")
