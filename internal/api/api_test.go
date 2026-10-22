@@ -233,6 +233,66 @@ func TestSignersReportsWhatTheLimitCutOff(t *testing.T) {
 	}
 }
 
+func TestSourcesCarryDKIMAndSPFPass(t *testing.T) {
+	_, payload := get(t, testAPI(t), "/api/v1/sources")
+
+	for _, raw := range payload["sources"].([]any) {
+		src := raw.(map[string]any)
+		if src["source_ip"] != "203.0.113.10" {
+			continue
+		}
+		if src["dkim_pass"].(float64) != 100 || src["spf_pass"].(float64) != 100 {
+			t.Errorf("source = %#v, want dkim_pass and spf_pass of 100", src)
+		}
+		return
+	}
+	t.Fatalf("no 203.0.113.10 in %#v", payload["sources"])
+}
+
+func TestSourcesFilterByReporter(t *testing.T) {
+	h := testAPI(t)
+
+	_, payload := get(t, h, "/api/v1/sources?reporter=Google.com")
+	if n := len(payload["sources"].([]any)); n != 2 {
+		t.Errorf("google.com sources = %d, want 2", n)
+	}
+	_, payload = get(t, h, "/api/v1/sources?reporter=outlook.com")
+	if n := len(payload["sources"].([]any)); n != 0 {
+		t.Errorf("outlook.com sources = %d, want 0", n)
+	}
+}
+
+func TestReporters(t *testing.T) {
+	code, payload := get(t, testAPI(t), "/api/v1/reporters")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d", code)
+	}
+
+	reporters, ok := payload["reporters"].([]any)
+	if !ok || len(reporters) != 1 {
+		t.Fatalf("reporters = %#v", payload["reporters"])
+	}
+	google := reporters[0].(map[string]any)
+	if google["reporter"] != "google.com" || google["total"].(float64) != 140 || google["dkim_pass"].(float64) != 100 {
+		t.Errorf("google = %#v", google)
+	}
+	if _, ok := payload["omitted"].(map[string]any); !ok {
+		t.Errorf("omitted = %#v, want an object", payload["omitted"])
+	}
+}
+
+func TestSignersCarryDays(t *testing.T) {
+	_, payload := get(t, testAPI(t), "/api/v1/signers")
+
+	for _, raw := range payload["signers"].([]any) {
+		signer := raw.(map[string]any)
+		days, ok := signer["days"].([]any)
+		if !ok || len(days) != 1 {
+			t.Errorf("%v days = %#v, want one day", signer["signing_domain"], signer["days"])
+		}
+	}
+}
+
 func TestWindowIsHonoured(t *testing.T) {
 	h := testAPI(t)
 
@@ -257,6 +317,7 @@ func TestBadParameters(t *testing.T) {
 		"/api/v1/domains?window=-1h",
 		"/api/v1/sources?limit=0",
 		"/api/v1/sources?limit=abc",
+		"/api/v1/reporters?limit=0",
 	} {
 		code, payload := get(t, h, path)
 		if code != http.StatusBadRequest {

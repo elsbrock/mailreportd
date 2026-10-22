@@ -165,9 +165,9 @@ func TestEndToEnd(t *testing.T) {
 
 		want := []string{
 			// 240 messages from 203.0.113.10, which SPF authorizes.
-			`mailreport_dmarc_messages{disposition="none",dkim="pass",domain="example.org",source_class="self",spf="pass",tenant="default"} 240`,
+			`mailreport_dmarc_messages{disposition="none",dkim="pass",domain="example.org",reporter="google.com",source_class="self",spf="pass",tenant="default"} 240`,
 			// 12 from 192.0.2.66, which it does not.
-			`mailreport_dmarc_messages{disposition="reject",dkim="fail",domain="example.org",source_class="unknown",spf="fail",tenant="default"} 12`,
+			`mailreport_dmarc_messages{disposition="reject",dkim="fail",domain="example.org",reporter="google.com",source_class="unknown",spf="fail",tenant="default"} 12`,
 			`mailreport_tlsrpt_sessions{domain="example.org",policy_type="sts",result="successful",tenant="default"} 500`,
 			`mailreport_tlsrpt_sessions{domain="example.org",policy_type="sts",result="failed",tenant="default"} 7`,
 			`mailreport_tlsrpt_failures{domain="example.org",result_type="certificate-expired",tenant="default"} 7`,

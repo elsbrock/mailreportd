@@ -105,7 +105,7 @@ func New(cfg *config.Config, log *slog.Logger, opts Options) (*Daemon, error) {
 	}
 	checker := policy.New(policyResolver, opts.HTTPClient, cfg.Policy.CacheTTL, cfg.Policy.Selectors)
 
-	collector := metrics.NewCollector(tenants, classifier, checker, cfg.Metrics.Window, log)
+	collector := metrics.NewCollector(tenants, classifier, checker, cfg.Metrics.Window, cfg.Metrics.ReporterLimit, log)
 	registry := prometheus.NewRegistry()
 	registry.MustRegister(
 		collectors.NewGoCollector(),

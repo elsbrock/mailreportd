@@ -88,6 +88,45 @@ const relayedAggregateXML = `<?xml version="1.0" encoding="UTF-8" ?>
   </record>
 </feedback>`
 
+// The dkimOnly fixture is the radar.example.org case: a receiver other than
+// Google reports mail that passed DMARC on SPF alone, because the signature
+// failed. Every message passes, so only the dkim and spf counts show it. The
+// org name is padded and mixed case, as receivers send it. The window ends at
+// midnight and covers 2025-08-02.
+const dkimOnlyAggregateXML = `<?xml version="1.0" encoding="UTF-8" ?>
+<feedback>
+  <report_metadata>
+    <org_name> Outlook.com </org_name>
+    <email>dmarcreport@microsoft.com</email>
+    <report_id>a1b2c3</report_id>
+    <date_range><begin>1754092800</begin><end>1754179200</end></date_range>
+  </report_metadata>
+  <policy_published>
+    <domain>example.org</domain><p>reject</p><sp>reject</sp><pct>100</pct>
+  </policy_published>
+  <record>
+    <row><source_ip>2001:db8:98c0::103</source_ip><count>10</count>
+      <policy_evaluated><disposition>none</disposition><dkim>pass</dkim><spf>pass</spf></policy_evaluated>
+    </row>
+    <identifiers><header_from>example.org</header_from></identifiers>
+    <auth_results><dkim><domain>example.org</domain><result>pass</result><selector>selector1</selector></dkim>
+      <spf><domain>example.org</domain><result>pass</result></spf></auth_results>
+  </record>
+  <record>
+    <row><source_ip>2001:db8:98c0::103</source_ip><count>4</count>
+      <policy_evaluated><disposition>none</disposition><dkim>fail</dkim><spf>pass</spf></policy_evaluated>
+    </row>
+    <identifiers><header_from>example.org</header_from></identifiers>
+    <auth_results><dkim><domain>example.org</domain><result>fail</result><selector>selector1</selector></dkim>
+      <spf><domain>example.org</domain><result>pass</result></spf></auth_results>
+  </record>
+</feedback>`
+
+func dkimOnlyAggregateMessage(t *testing.T) []byte {
+	t.Helper()
+	return mimeMessage("Report Domain: example.org outlook", "outlook.xml.gz", gz(t, dkimOnlyAggregateXML))
+}
+
 func relayedAggregateMessage(t *testing.T) []byte {
 	t.Helper()
 	return mimeMessage("Report Domain: example.org relayed", "relayed.xml.gz", gz(t, relayedAggregateXML))

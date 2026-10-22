@@ -22,7 +22,7 @@ func TestSignersSeparatesValidFromAligned(t *testing.T) {
 	s := testStore(t)
 	ingest(t, s, relayedAggregateMessage(t))
 
-	signers, omitted, err := s.Signers(context.Background(), time.Time{}, "", 100)
+	signers, omitted, err := s.Signers(context.Background(), time.Time{}, "", "", 100)
 	if err != nil {
 		t.Fatalf("signers: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestSignersReportsTheRemainderItCutOff(t *testing.T) {
 	s := testStore(t)
 	ingest(t, s, relayedAggregateMessage(t))
 
-	signers, omitted, err := s.Signers(context.Background(), time.Time{}, "", 1)
+	signers, omitted, err := s.Signers(context.Background(), time.Time{}, "", "", 1)
 	if err != nil {
 		t.Fatalf("signers: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestSignersFiltersByDomain(t *testing.T) {
 	s := testStore(t)
 	ingest(t, s, relayedAggregateMessage(t))
 
-	signers, _, err := s.Signers(context.Background(), time.Time{}, "example.net", 100)
+	signers, _, err := s.Signers(context.Background(), time.Time{}, "example.net", "", 100)
 	if err != nil {
 		t.Fatalf("signers: %v", err)
 	}

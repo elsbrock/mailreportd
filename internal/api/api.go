@@ -50,6 +50,7 @@ func (a *API) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/domains", a.handle(a.domains))
 	mux.HandleFunc("GET /api/v1/sources", a.handle(a.sources))
 	mux.HandleFunc("GET /api/v1/signers", a.handle(a.signers))
+	mux.HandleFunc("GET /api/v1/reporters", a.handle(a.reporters))
 	mux.HandleFunc("GET /api/v1/failures", a.handle(a.failures))
 	mux.HandleFunc("GET /api/v1/quarantine", a.handle(a.quarantine))
 }
@@ -134,7 +135,7 @@ func (a *API) sources(r *http.Request, s *store.Store) (any, error) {
 		return nil, err
 	}
 
-	sources, err := s.Sources(r.Context(), since, r.URL.Query().Get("domain"), limit)
+	sources, err := s.Sources(r.Context(), since, r.URL.Query().Get("domain"), r.URL.Query().Get("reporter"), limit)
 	if err != nil {
 		return nil, err
 	}
@@ -158,7 +159,7 @@ func (a *API) signers(r *http.Request, s *store.Store) (any, error) {
 		return nil, err
 	}
 
-	signers, omitted, err := s.Signers(r.Context(), since, r.URL.Query().Get("domain"), limit)
+	signers, omitted, err := s.Signers(r.Context(), since, r.URL.Query().Get("domain"), r.URL.Query().Get("reporter"), limit)
 	if err != nil {
 		return nil, err
 	}
@@ -169,6 +170,31 @@ func (a *API) signers(r *http.Request, s *store.Store) (any, error) {
 		// Always present, so a truncated answer cannot be mistaken for a
 		// complete one by a client that forgot to look.
 		"omitted": omitted,
+	}, nil
+}
+
+// reporters answers which receiver said what. A pass rate that differs by
+// receiver points at the receiving side, or at a route only some receivers
+// see, rather than at the sender.
+func (a *API) reporters(r *http.Request, s *store.Store) (any, error) {
+	since, err := window(r)
+	if err != nil {
+		return nil, err
+	}
+	limit, err := intParam(r, "limit", 100, 1000)
+	if err != nil {
+		return nil, err
+	}
+
+	reporters, omitted, err := s.Reporters(r.Context(), since, r.URL.Query().Get("domain"), limit)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"window_start": since.UTC().Format(time.RFC3339),
+		"tenant":       s.Tenant(),
+		"reporters":    nonNil(reporters),
+		"omitted":      omitted,
 	}, nil
 }
 

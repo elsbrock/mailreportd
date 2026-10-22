@@ -9,8 +9,11 @@
 package metrics
 
 import (
+	"cmp"
 	"context"
 	"log/slog"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,8 +29,8 @@ const namespace = "mailreport"
 var (
 	descMessages = prometheus.NewDesc(
 		namespace+"_dmarc_messages",
-		"Messages reported in the aggregation window, by evaluation outcome and source class.",
-		[]string{"tenant", "domain", "disposition", "dkim", "spf", "source_class"}, nil)
+		"Messages reported in the aggregation window, by evaluation outcome, source class and reporting organization.",
+		[]string{"tenant", "domain", "disposition", "dkim", "spf", "source_class", "reporter"}, nil)
 
 	descTLSSessions = prometheus.NewDesc(
 		namespace+"_tlsrpt_sessions",
@@ -211,11 +214,12 @@ type Tenant struct {
 // them touches SQLite and, for the SPF classification, DNS. A scrape must never
 // be able to block on either.
 type Collector struct {
-	tenants    []Tenant
-	classifier *classify.Classifier
-	checker    *policy.Checker
-	window     time.Duration
-	log        *slog.Logger
+	tenants       []Tenant
+	classifier    *classify.Classifier
+	checker       *policy.Checker
+	window        time.Duration
+	reporterLimit int
+	log           *slog.Logger
 
 	mu       sync.RWMutex
 	snapshot []prometheus.Metric
@@ -225,20 +229,25 @@ type Collector struct {
 // defaults to thirty days, which comfortably spans the reporting lag of every
 // large receiver.
 // A nil checker disables the published-policy series entirely, which is what
-// tests that care only about report aggregation pass.
-func NewCollector(tenants []Tenant, classifier *classify.Classifier, checker *policy.Checker, window time.Duration, log *slog.Logger) *Collector {
+// tests that care only about report aggregation pass. reporterLimit bounds the
+// distinct reporter label values per tenant; zero means DefaultReporterLimit.
+func NewCollector(tenants []Tenant, classifier *classify.Classifier, checker *policy.Checker, window time.Duration, reporterLimit int, log *slog.Logger) *Collector {
 	if window <= 0 {
 		window = 30 * 24 * time.Hour
+	}
+	if reporterLimit <= 0 {
+		reporterLimit = DefaultReporterLimit
 	}
 	if log == nil {
 		log = slog.Default()
 	}
 	return &Collector{
-		tenants:    tenants,
-		classifier: classifier,
-		checker:    checker,
-		window:     window,
-		log:        log,
+		tenants:       tenants,
+		classifier:    classifier,
+		checker:       checker,
+		window:        window,
+		reporterLimit: reporterLimit,
+		log:           log,
 	}
 }
 
@@ -302,24 +311,26 @@ func (c *Collector) collectDMARC(ctx context.Context, tenant Tenant, since time.
 	}
 
 	// Fold per-source rows into the bounded label set. This is the step that
-	// keeps Prometheus safe: the map key can never contain an address.
+	// keeps Prometheus safe: the map key can never contain an address, and the
+	// reporter only one of a capped set of values.
 	type key struct {
-		domain, disposition, dkim, spf string
-		class                          classify.Class
+		domain, disposition, dkim, spf, reporter string
+		class                                    classify.Class
 	}
 	totals := map[key]float64{}
+	reporter := reporterLabels(sources, c.reporterLimit)
 
 	for _, src := range sources {
 		class := classify.ClassUnknown
 		if src.SourceIP.IsValid() {
 			class = c.classifier.Classify(ctx, src.Domain, src.SourceIP, src.DKIM == "pass", src.SPF == "pass")
 		}
-		totals[key{src.Domain, src.Disposition, src.DKIM, src.SPF, class}] += float64(src.Count)
+		totals[key{src.Domain, src.Disposition, src.DKIM, src.SPF, reporter(src.Reporter), class}] += float64(src.Count)
 	}
 
 	for k, count := range totals {
 		add(descMessages, prometheus.GaugeValue, count,
-			tenant.ID, k.domain, k.disposition, k.dkim, k.spf, string(k.class))
+			tenant.ID, k.domain, k.disposition, k.dkim, k.spf, string(k.class), k.reporter)
 	}
 
 	last, err := tenant.Store.LastReports(ctx)
@@ -504,4 +515,64 @@ func Register(reg prometheus.Registerer, c *Collector) error {
 		}
 	}
 	return nil
+}
+
+// DefaultReporterLimit is how many reporting organizations get their own
+// label value per tenant. The handful of large receivers that send reports
+// fit with room to spare.
+const DefaultReporterLimit = 20
+
+// Reporter label values that are not a reporting organization.
+const (
+	ReporterOther   = "other"
+	ReporterUnknown = "unknown"
+)
+
+// maxReporterLabel bounds the length of one label value.
+const maxReporterLabel = 64
+
+// reporterLabels returns the label value for each reporter: the busiest limit
+// reporters by message volume keep their name, everyone else is "other".
+//
+// The reporter is whatever org_name a report claims, and anyone can mail the
+// rua address. Without the cap a stream of forged reports would mint one
+// series per invented name, which is the failure the source_class label
+// exists to avoid. With it, a forger can at most displace a real receiver
+// into "other".
+func reporterLabels(sources []store.DMARCSource, limit int) func(string) string {
+	volume := map[string]int64{}
+	for _, src := range sources {
+		if src.Reporter != "" {
+			volume[src.Reporter] += src.Count
+		}
+	}
+
+	names := make([]string, 0, len(volume))
+	for name := range volume {
+		names = append(names, name)
+	}
+	slices.SortFunc(names, func(a, b string) int {
+		if c := cmp.Compare(volume[b], volume[a]); c != 0 {
+			return c
+		}
+		return strings.Compare(a, b)
+	})
+
+	kept := make(map[string]bool, limit)
+	for _, name := range names[:min(limit, len(names))] {
+		kept[name] = true
+	}
+
+	return func(name string) string {
+		switch {
+		case name == "":
+			return ReporterUnknown
+		case !kept[name]:
+			return ReporterOther
+		}
+		if r := []rune(name); len(r) > maxReporterLabel {
+			return string(r[:maxReporterLabel])
+		}
+		return name
+	}
 }

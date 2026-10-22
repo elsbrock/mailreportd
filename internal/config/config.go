@@ -77,6 +77,11 @@ type Metrics struct {
 	// cached snapshot, so this is what bounds metric staleness, not the scrape
 	// interval.
 	RefreshInterval time.Duration `yaml:"refresh_interval"`
+	// ReporterLimit is how many reporting organizations get their own value
+	// of the reporter label per tenant; the rest export as "other". Report
+	// senders choose their own name, so this bounds what strangers can add
+	// to Prometheus.
+	ReporterLimit int `yaml:"reporter_limit"`
 }
 
 // Classification controls how report sources are attributed.
@@ -239,6 +244,9 @@ func (c *Config) applyDefaults() {
 	if c.Metrics.RefreshInterval == 0 {
 		c.Metrics.RefreshInterval = time.Minute
 	}
+	if c.Metrics.ReporterLimit == 0 {
+		c.Metrics.ReporterLimit = 20
+	}
 	if c.Classification.CacheTTL == 0 {
 		c.Classification.CacheTTL = 15 * time.Minute
 	}
@@ -288,6 +296,10 @@ func (c *Config) validate() error {
 	case "text", "json":
 	default:
 		return fmt.Errorf("log.format: unknown format %q", c.Log.Format)
+	}
+
+	if c.Metrics.ReporterLimit < 0 {
+		return fmt.Errorf("metrics.reporter_limit must not be negative")
 	}
 
 	if len(c.Tenants) == 0 {

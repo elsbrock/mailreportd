@@ -32,6 +32,9 @@ func TestDefaults(t *testing.T) {
 	if cfg.Metrics.Window != 30*24*time.Hour {
 		t.Errorf("metrics window = %v", cfg.Metrics.Window)
 	}
+	if cfg.Metrics.ReporterLimit != 20 {
+		t.Errorf("metrics reporter_limit = %d, want 20", cfg.Metrics.ReporterLimit)
+	}
 	if cfg.Storage.Retention.Forensic >= cfg.Storage.Retention.Aggregate {
 		t.Error("failure reports carry recipient data and must not be kept as long as aggregates")
 	}
@@ -126,6 +129,11 @@ func TestValidation(t *testing.T) {
 			name: "duplicate tenant",
 			yaml: "tenants:\n  - id: a\n    domains: [x.example]\n  - id: a\n    domains: [y.example]\n",
 			want: "duplicate id",
+		},
+		{
+			name: "negative reporter limit",
+			yaml: minimal + "metrics:\n  reporter_limit: -1\n",
+			want: "reporter_limit",
 		},
 		{
 			name: "unknown log level",

@@ -34,8 +34,8 @@ export const site = {
 export const metricRows = [
 	{
 		metric: 'mailreport_dmarc_messages',
-		labels: 'tenant, domain, disposition, dkim, spf, source_class',
-		help: 'Messages reported in the aggregation window, by evaluation outcome and source class.'
+		labels: 'tenant, domain, disposition, dkim, spf, source_class, reporter',
+		help: 'Messages reported in the aggregation window, by evaluation outcome, source class and reporting organization.'
 	},
 	{
 		metric: 'mailreport_tlsrpt_sessions',
@@ -194,6 +194,7 @@ export const endpoints = {
 		{ method: 'GET', path: '/api/v1/domains' },
 		{ method: 'GET', path: '/api/v1/sources' },
 		{ method: 'GET', path: '/api/v1/signers' },
+		{ method: 'GET', path: '/api/v1/reporters' },
 		{ method: 'GET', path: '/api/v1/failures' },
 		{ method: 'GET', path: '/api/v1/quarantine' }
 	]
@@ -201,10 +202,12 @@ export const endpoints = {
 
 export const snippets = {
 	metrics: `mailreport_dmarc_messages{domain="example.org",dkim="pass",
-  spf="pass",disposition="none",source_class="self"} 4213
+  spf="pass",disposition="none",source_class="self",
+  reporter="google.com"} 4213
 
 mailreport_dmarc_messages{domain="example.org",dkim="fail",
-  spf="fail",disposition="reject",source_class="unknown"} 37
+  spf="fail",disposition="reject",source_class="unknown",
+  reporter="outlook.com"} 37
 
 mailreport_tlsrpt_sessions{domain="example.org",
   policy_type="sts",result="failed"} 3

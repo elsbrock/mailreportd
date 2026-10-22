@@ -102,6 +102,7 @@ func setup(t *testing.T) (*Collector, *prometheus.Registry) {
 		classify.New(resolver, time.Minute, nil),
 		nil, // these tests cover report aggregation, not published policy
 		30*24*time.Hour,
+		0,
 		nil,
 	)
 	c.Refresh(context.Background())
@@ -117,11 +118,11 @@ func TestCollectorClassifiesSources(t *testing.T) {
 	_, reg := setup(t)
 
 	expected := `
-# HELP mailreport_dmarc_messages Messages reported in the aggregation window, by evaluation outcome and source class.
+# HELP mailreport_dmarc_messages Messages reported in the aggregation window, by evaluation outcome, source class and reporting organization.
 # TYPE mailreport_dmarc_messages gauge
-mailreport_dmarc_messages{disposition="none",dkim="pass",domain="example.org",source_class="forwarder",spf="fail",tenant="default"} 7
-mailreport_dmarc_messages{disposition="none",dkim="pass",domain="example.org",source_class="self",spf="pass",tenant="default"} 100
-mailreport_dmarc_messages{disposition="reject",dkim="fail",domain="example.org",source_class="unknown",spf="fail",tenant="default"} 4
+mailreport_dmarc_messages{disposition="none",dkim="pass",domain="example.org",reporter="google.com",source_class="forwarder",spf="fail",tenant="default"} 7
+mailreport_dmarc_messages{disposition="none",dkim="pass",domain="example.org",reporter="google.com",source_class="self",spf="pass",tenant="default"} 100
+mailreport_dmarc_messages{disposition="reject",dkim="fail",domain="example.org",reporter="google.com",source_class="unknown",spf="fail",tenant="default"} 4
 `
 	if err := testutil.GatherAndCompare(reg, strings.NewReader(expected), "mailreport_dmarc_messages"); err != nil {
 		t.Error(err)
@@ -242,7 +243,7 @@ func TestCollectorSurvivesUnresolvableSPF(t *testing.T) {
 		[]Tenant{{ID: "default", Store: s, Domains: []string{"example.org"}}},
 		classify.New(&fakeResolver{txt: map[string][]string{}}, time.Minute, nil),
 		nil, // as above: no policy checker in this fixture
-		30*24*time.Hour, nil,
+		30*24*time.Hour, 0, nil,
 	)
 	c.Refresh(context.Background())
 
@@ -307,7 +308,7 @@ func policyCollector(t *testing.T, resolver *policyResolver, selectors map[strin
 		[]Tenant{{ID: "default", Store: db.Tenant("default"), Domains: []string{"example.org"}}},
 		classify.New(resolver, time.Minute, nil),
 		policy.New(resolver, nil, time.Minute, selectors),
-		30*24*time.Hour, nil,
+		30*24*time.Hour, 0, nil,
 	)
 	c.Refresh(context.Background())
 
@@ -373,5 +374,49 @@ func TestIncompletePolicyCheckEmitsNoVerdict(t *testing.T) {
 	}
 	if count != 1 {
 		t.Errorf("mailreport_policy_check_errors_total: %d series, want 1", count)
+	}
+}
+
+func TestReporterLabelsAreCapped(t *testing.T) {
+	sources := []store.DMARCSource{
+		{Reporter: "google.com", Count: 500},
+		{Reporter: "outlook.com", Count: 300},
+		{Reporter: "google.com", Count: 1},
+		// A forged report under an invented name, and one with none at all.
+		{Reporter: "forged-7f3a", Count: 2},
+		{Reporter: "", Count: 9},
+	}
+
+	label := reporterLabels(sources, 2)
+	for name, want := range map[string]string{
+		"google.com":  "google.com",
+		"outlook.com": "outlook.com",
+		"forged-7f3a": ReporterOther,
+		"":            ReporterUnknown,
+		"never-seen":  ReporterOther,
+	} {
+		if got := label(name); got != want {
+			t.Errorf("label(%q) = %q, want %q", name, got, want)
+		}
+	}
+}
+
+func TestReporterLabelsBreakTiesByName(t *testing.T) {
+	// Equal volume must not make the kept set depend on map iteration order,
+	// or the series would flap between refreshes.
+	sources := []store.DMARCSource{{Reporter: "b.example", Count: 5}, {Reporter: "a.example", Count: 5}}
+	for range 20 {
+		label := reporterLabels(sources, 1)
+		if label("a.example") != "a.example" || label("b.example") != ReporterOther {
+			t.Fatal("tie not broken by name")
+		}
+	}
+}
+
+func TestReporterLabelsAreTruncated(t *testing.T) {
+	long := strings.Repeat("x", 200)
+	label := reporterLabels([]store.DMARCSource{{Reporter: long, Count: 1}}, 5)
+	if got := label(long); len(got) != maxReporterLabel {
+		t.Errorf("label length = %d, want %d", len(got), maxReporterLabel)
 	}
 }

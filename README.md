@@ -100,7 +100,8 @@ Two listeners, because they carry different things.
 | `GET /metrics` | Prometheus exposition |
 | `GET /api/v1/domains` | per-domain summary |
 | `GET /api/v1/sources` | per-source detail, worst offenders first |
-| `GET /api/v1/signers` | who is signing your mail, busiest first |
+| `GET /api/v1/signers` | who is signing your mail, busiest first, with a per-day breakdown |
+| `GET /api/v1/reporters` | what each receiver reported, per domain, busiest first |
 | `GET /api/v1/failures` | failure report envelopes; `?include=content` decrypts and is logged |
 | `GET /api/v1/quarantine` | messages that failed to parse |
 
@@ -125,8 +126,32 @@ anyone spoofing you — the response is capped and always carries an `omitted`
 object with the signers and message volume the limit cut off. For the same
 reason `d=` is never a Prometheus label.
 
-Query parameters: `window` (Go duration, default `720h`), `domain`, `limit`,
-`tenant`.
+`passing` counts mail that passed DMARC, which needs only one of DKIM or SPF
+to align. `/domains`, `/sources` and `/reporters` therefore also carry
+`dkim_pass` and `spf_pass`, the receiver's aligned verdict for each. A domain
+at full `passing` with `dkim_pass` below it is getting through on SPF alone.
+To find where:
+
+```
+/api/v1/domains                                    # dkim_pass < passing?
+/api/v1/reporters?domain=example.org               # which receiver saw it
+/api/v1/sources?domain=example.org&reporter=outlook.com&limit=1000
+/api/v1/signers?domain=example.org&reporter=outlook.com
+```
+
+`/sources` sorts by `failing`, which is zero for SPF-only passes, so raise
+`limit` and look for `dkim_pass` below `passing`. Each signer in `/signers`
+carries `days`: `messages`, `signature_pass` and `evaluated_dkim_pass` per UTC
+day of the report window, so a signature that starts failing shows as a
+trend. Days without reports are left out rather than zero. Mail that arrived
+with no signature at all has no signer to break down; `/sources` still counts
+it.
+
+Query parameters: `tenant`; `window` (Go duration, default `720h`) on all but
+`/quarantine`; `limit`
+on every list except `/domains`; `domain` on `/sources`, `/signers` and
+`/reporters`; `reporter` on `/sources` and `/signers` (case-insensitive, e.g.
+`reporter=outlook.com`). `/reporters` also carries an `omitted` remainder.
 
 ## Metrics
 
@@ -137,7 +162,7 @@ series, and the read API bridges the gap.
 
 | Metric | Labels |
 |---|---|
-| `mailreport_dmarc_messages` | `tenant`, `domain`, `disposition`, `dkim`, `spf`, `source_class` |
+| `mailreport_dmarc_messages` | `tenant`, `domain`, `disposition`, `dkim`, `spf`, `source_class`, `reporter` |
 | `mailreport_tlsrpt_sessions` | `tenant`, `domain`, `policy_type`, `result` |
 | `mailreport_tlsrpt_failures` | `tenant`, `domain`, `result_type` |
 | `mailreport_report_last_received_timestamp_seconds` | `tenant`, `domain`, `format` |
@@ -146,6 +171,14 @@ series, and the read API bridges the gap.
 | `mailreport_dmarc_policy` | `tenant`, `domain`, `p` |
 | `mailreport_ingest_messages_total`, `_ingest_reports_total`, `_ingest_errors_total` | `tenant`, `feeder`, … |
 | `mailreport_ingest_last_success_timestamp_seconds` | `tenant`, `feeder` |
+
+`reporter` is the reporting organization, lowercased (`google.com`,
+`outlook.com`). Anyone can send a report under any name, so only the
+`metrics.reporter_limit` (default 20) busiest reporters per tenant keep their
+name, cut to 64 characters; the rest are `other`, and a report without one is
+`unknown`. Queries
+that compare two `mailreport_dmarc_messages` selectors one-to-one need
+`ignoring(reporter)` or a `sum by (...)`.
 
 Published-policy series, from the checks rather than from reports:
 
