@@ -78,7 +78,13 @@ delivers to. The IMAP password is named by environment variable, never written
 in the file, so the file stays committable. The IMAP feeder reads `INBOX`
 plus whatever folder the server marks `\Junk` (RFC 6154), because spam
 filters regularly file reports there; set `include_junk: false` to skip it, or
-list folders explicitly with `mailboxes: [INBOX, Reports]`. A locally delivered
+list folders explicitly with `mailboxes: [INBOX, Reports]`. The single-folder
+`mailbox:` key still works; setting it together with `mailboxes` is an error.
+The first poll after enabling Junk reads that folder from the start, so expect
+a one-off burst of late reports and a step in the numbers. A folder that
+cannot be read fails the run (`mailreport_ingest_errors_total`, and the
+last-success timestamp stops) even though the other folders were still
+ingested; the log names the folder. A locally delivered
 maildir works in place of IMAP: `type: maildir` with a `path`. The feeder reads `new/` and
 `cur/` and never renames, moves or deletes a file.
 
@@ -148,9 +154,8 @@ with no signature at all has no signer to break down; `/sources` still counts
 it.
 
 Query parameters: `tenant`; `window` (Go duration, default `720h`) on all but
-`/quarantine`; `limit`
-on every list except `/domains`; `domain` on `/sources`, `/signers` and
-`/reporters`; `reporter` on `/sources` and `/signers` (case-insensitive, e.g.
+`/quarantine`; `limit` on every list except `/domains`; `domain` on
+`/sources`, `/signers` and `/reporters`; `reporter` on `/sources` and `/signers` (case-insensitive, e.g.
 `reporter=outlook.com`). `/reporters` also carries an `omitted` remainder.
 
 ## Metrics
@@ -231,7 +236,9 @@ Two signals are worth waking someone for, and one explicitly is not.
 - **Ingest is idempotent** at two levels: identical message bytes by checksum,
   and the same report arriving under different envelopes by report identity.
   Reprocessing the whole mailbox is safe and is the supported recovery path —
-  clear the feeder's cursor rows (`<feeder>/<folder>`) and restart.
+  stop the daemon, delete the feeder's rows from the `feeder_cursor` table in
+  the database at `storage.path` (`feeder` is `<name>/<folder>`, where `name`
+  defaults to `imap-<index>` unless set on the feeder), and start it again.
 - **Nothing is deleted because it failed to parse.** Unparseable reports go to
   quarantine with the error and the original bytes, and survive retention
   sweeps. Autoreplies and spam are recorded as ignored, not as failures, so
@@ -239,7 +246,8 @@ Two signals are worth waking someone for, and one explicitly is not.
 - **Renaming a feeder makes it rescan** from the beginning, because the name is
   part of its cursor key. Harmless, but it will re-download the mailbox.
   Upgrading from a single-folder release keeps the existing cursor for the
-  first configured folder.
+  first folder in `mailboxes`, provided the feeder name is unchanged; put the
+  folder the old `mailbox` pointed at first.
 
 ## Development
 
