@@ -251,6 +251,22 @@ rules are in `contrib/prometheus/alerts.yaml`, and a Grafana dashboard in
 - **Not report volume.** Aggregate reports arriving late or not at all is
   normal and not actionable.
 
+## Retention
+
+A sweep runs every `storage.sweep_interval` (default 6h) and applies these
+windows, all set under `storage.retention`:
+
+| Data | Key | Default |
+|---|---|---|
+| Aggregate and TLS report rows, by report end date | `aggregate` | 365 days |
+| Failure report content, including failure reports in quarantine | `forensic` | 7 days |
+| Raw message bytes | `raw` | 7 days |
+
+Quarantined messages other than failure reports are kept until you delete them,
+because they are the evidence for a parser fix. Exported metrics cover the last
+`metrics.window` (default 30 days). mailreportd never deletes mail from the
+mailbox, so the mailbox is also the source for a full reprocess.
+
 ## Operational notes
 
 - **Nothing in the mailbox is modified.** The feeder opens each folder
@@ -286,6 +302,11 @@ assembled daemon through to `/metrics` and the JSON API. The feeder's
 correctness lives in protocol details, and a hand-rolled fake would only agree
 with whatever the feeder happens to do.
 
+## Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md). Report security issues as described in
+[`SECURITY.md`](SECURITY.md).
+
 ## License
 
-MIT
+[MIT](LICENSE)
