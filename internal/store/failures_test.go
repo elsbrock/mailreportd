@@ -236,3 +236,60 @@ func TestSealerRoundTripAndKeyFile(t *testing.T) {
 		t.Error("bad key file accepted")
 	}
 }
+
+// A failure report that does not parse is quarantined, but its bytes are still
+// recipient PII: sealed with a key, dropped without one, and gone after the
+// failure-report window either way.
+func TestQuarantinedFailureReportIsNotKeptInClear(t *testing.T) {
+	body := imaptest.FailureMail(t, "arf-broken", "", "victim@dest.example", time.Now())
+	ctx := context.Background()
+
+	rawBody := func(t *testing.T, db *DB) []byte {
+		t.Helper()
+		var b []byte
+		if err := db.sql.QueryRowContext(ctx,
+			`SELECT body FROM raw_report WHERE state = ?`, StateQuarantined).Scan(&b); err != nil {
+			t.Fatalf("read quarantined body: %v", err)
+		}
+		return b
+	}
+
+	t.Run("sealed with a key", func(t *testing.T) {
+		sealer := testSealer(t)
+		db, s := failureDB(t, sealer)
+		res, err := s.Ingest(ctx, RawMessage{Feeder: "test", Body: body})
+		if err != nil {
+			t.Fatalf("ingest: %v", err)
+		}
+		if res.State != StateQuarantined {
+			t.Fatalf("state = %q, want quarantined", res.State)
+		}
+		stored := rawBody(t, db)
+		if bytes.Contains(stored, []byte("victim@dest.example")) {
+			t.Fatal("quarantined failure report stored in clear")
+		}
+		plain, err := sealer.Open(stored)
+		if err != nil || !bytes.Equal(plain, body) {
+			t.Fatalf("sealed body does not open to the original: %v", err)
+		}
+
+		if _, err := s.Sweep(ctx, Retention{
+			Raw: 365 * 24 * time.Hour, Aggregate: 365 * 24 * time.Hour, Forensic: time.Hour,
+		}, time.Now().Add(2*time.Hour)); err != nil {
+			t.Fatalf("sweep: %v", err)
+		}
+		if b := rawBody(t, db); b != nil {
+			t.Error("quarantined failure body survived the failure-report window")
+		}
+	})
+
+	t.Run("dropped without a key", func(t *testing.T) {
+		db, s := failureDB(t, nil)
+		if _, err := s.Ingest(ctx, RawMessage{Feeder: "test", Body: body}); err != nil {
+			t.Fatalf("ingest: %v", err)
+		}
+		if b := rawBody(t, db); b != nil {
+			t.Error("quarantined failure report kept without a key")
+		}
+	})
+}

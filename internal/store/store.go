@@ -224,12 +224,15 @@ func (s *Store) Ingest(ctx context.Context, msg RawMessage) (IngestResult, error
 	// Only quarantined messages keep their body: that is the one case where the
 	// bytes are still needed. Parsed reports are already normalized, and
 	// ignored messages are noise.
+	sensitive := decoded != nil && carriesFailure(decoded)
 	var body []byte
 	if state == StateQuarantined {
-		body = msg.Body
+		if body, err = s.quarantineBody(msg.Body, sensitive); err != nil {
+			return res, err
+		}
 	}
 
-	rawID, inserted, err := insertRaw(ctx, tx, s.tenant, msg, state, errText, body)
+	rawID, inserted, err := insertRaw(ctx, tx, s.tenant, msg, state, errText, body, sensitive)
 	if err != nil {
 		return res, err
 	}
@@ -270,9 +273,13 @@ func (s *Store) Ingest(ctx context.Context, msg RawMessage) (IngestResult, error
 		if lastErr != nil {
 			text = lastErr.Error()
 		}
+		body, err := s.quarantineBody(msg.Body, sensitive)
+		if err != nil {
+			return res, err
+		}
 		if _, err := tx.ExecContext(ctx,
 			`UPDATE raw_report SET state = ?, error = ?, body = ? WHERE id = ?`,
-			state, text, msg.Body, rawID); err != nil {
+			state, text, body, rawID); err != nil {
 			return res, fmt.Errorf("quarantine message: %w", err)
 		}
 	}
@@ -281,13 +288,41 @@ func (s *Store) Ingest(ctx context.Context, msg RawMessage) (IngestResult, error
 	return res, tx.Commit()
 }
 
-func insertRaw(ctx context.Context, tx *sql.Tx, tenant string, msg RawMessage, state, errText string, body []byte) (int64, bool, error) {
+// carriesFailure reports whether the envelope walk recognized a failure
+// report, whose bytes are recipient PII whether or not they go on to parse.
+func carriesFailure(m *report.Message) bool {
+	for _, p := range m.Payloads {
+		if p.Format == report.FormatDMARCFailure {
+			return true
+		}
+	}
+	return false
+}
+
+// quarantineBody is the body a quarantined message keeps. A failure report is
+// held to the same rule as a parsed one: sealed with the failure key, or
+// dropped when there is none, never written in the clear.
+func (s *Store) quarantineBody(body []byte, sensitive bool) ([]byte, error) {
+	if !sensitive {
+		return body, nil
+	}
+	if s.sealer == nil {
+		return nil, nil
+	}
+	sealed, err := s.sealer.Seal(body)
+	if err != nil {
+		return nil, fmt.Errorf("seal quarantined failure report: %w", err)
+	}
+	return sealed, nil
+}
+
+func insertRaw(ctx context.Context, tx *sql.Tx, tenant string, msg RawMessage, state, errText string, body []byte, sensitive bool) (int64, bool, error) {
 	result, err := tx.ExecContext(ctx, `
-		INSERT INTO raw_report (tenant_id, checksum, feeder, source_ref, message_id, filename, received_at, state, error, body)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO raw_report (tenant_id, checksum, feeder, source_ref, message_id, filename, received_at, state, error, body, sensitive)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (tenant_id, checksum) DO NOTHING`,
 		tenant, msg.Checksum(), msg.Feeder, msg.SourceRef, msg.MessageID, msg.Filename,
-		msg.Received.Unix(), state, errText, body)
+		msg.Received.Unix(), state, errText, body, sensitive)
 	if err != nil {
 		return 0, false, fmt.Errorf("insert raw message: %w", err)
 	}
@@ -459,7 +494,7 @@ func (s *Store) IngestReport(ctx context.Context, msg RawMessage, rep *report.Re
 	}
 	defer tx.Rollback()
 
-	rawID, inserted, err := insertRaw(ctx, tx, s.tenant, msg, StateParsed, "", nil)
+	rawID, inserted, err := insertRaw(ctx, tx, s.tenant, msg, StateParsed, "", nil, false)
 	if err != nil {
 		return res, err
 	}
@@ -566,7 +601,8 @@ type SweepResult struct {
 //
 // Quarantined messages are exempt from the raw-body sweep: they exist precisely
 // because something needs fixing, and discarding them on a timer would destroy
-// the evidence before anyone looked.
+// the evidence before anyone looked. Quarantined failure reports are the
+// exception: they are PII, and lose their body on the failure-report window.
 func (s *Store) Sweep(ctx context.Context, r Retention, now time.Time) (SweepResult, error) {
 	var res SweepResult
 
@@ -590,6 +626,16 @@ func (s *Store) Sweep(ctx context.Context, r Retention, now time.Time) (SweepRes
 		return res, fmt.Errorf("sweep failure reports: %w", err)
 	}
 	res.Failures, _ = result.RowsAffected()
+
+	result, err = s.db.ExecContext(ctx, `
+		UPDATE raw_report SET body = NULL
+		WHERE tenant_id = ? AND received_at < ? AND body IS NOT NULL AND sensitive = 1`,
+		s.tenant, forensicCutoff)
+	if err != nil {
+		return res, fmt.Errorf("sweep quarantined failure bodies: %w", err)
+	}
+	n, _ := result.RowsAffected()
+	res.RawBodies += n
 
 	aggCutoff := now.Add(-r.Aggregate).Unix()
 	result, err = s.db.ExecContext(ctx, `

@@ -143,4 +143,10 @@ CREATE TABLE failure_access_log (
 	report_ids TEXT    NOT NULL DEFAULT '[]'
 );
 `,
+	`
+-- A quarantined failure report is still recipient PII. sensitive = 1 marks a
+-- body that is sealed (or was dropped for want of a key) and ages out on the
+-- failure-report retention rather than being kept until someone looks.
+ALTER TABLE raw_report ADD COLUMN sensitive INTEGER NOT NULL DEFAULT 0;
+`,
 }
