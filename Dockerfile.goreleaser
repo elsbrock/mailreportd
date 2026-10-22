@@ -1,0 +1,14 @@
+# Used by goreleaser (dockers_v2), which supplies the prebuilt binary per platform.
+FROM busybox:1.37 AS state
+RUN mkdir -p /state
+
+FROM gcr.io/distroless/static-debian12:nonroot
+ARG TARGETPLATFORM
+COPY $TARGETPLATFORM/mailreportd /mailreportd
+# Matches storage.path in config.example.yaml, owned by the nonroot user so a
+# fresh named volume is writable.
+COPY --from=state --chown=65532:65532 /state /var/lib/mailreportd
+VOLUME /var/lib/mailreportd
+EXPOSE 8088 9188
+ENTRYPOINT ["/mailreportd"]
+CMD ["-config", "/etc/mailreportd/config.yaml"]

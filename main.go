@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"syscall"
 
 	"github.com/elsbrock/mailreportd/internal/config"
@@ -17,6 +18,13 @@ import (
 
 // version is overridden at build time via -ldflags.
 var version = "dev"
+
+func init() {
+	// go install builds carry the module version but no ldflags.
+	if info, ok := debug.ReadBuildInfo(); ok && version == "dev" && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		version = info.Main.Version
+	}
+}
 
 func main() {
 	if err := run(); err != nil {
