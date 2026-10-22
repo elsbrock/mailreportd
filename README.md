@@ -1,310 +1,283 @@
 # mailreportd
 
-Ingests DMARC aggregate, DMARC failure and SMTP TLS reports from a mailbox,
-checks the mail policies your domain publishes in DNS, and exposes bounded
-aggregates for Prometheus plus per-source detail over JSON.
+[![CI](https://github.com/elsbrock/mailreportd/actions/workflows/ci.yml/badge.svg)](https://github.com/elsbrock/mailreportd/actions/workflows/ci.yml)
 
-It knows protocols, not products. Inputs are RFC-defined report formats reached
-over IMAP, a maildir or HTTPS submission; outputs are Prometheus text and a
-JSON API. No MTA admin API, no
-delivery-provider API, no log tailing, no assumption that you run Grafana, Nix,
-or any particular mail server. A working install is one binary, one config file,
-and one mailbox.
+mailreportd reads DMARC and SMTP TLS reports from a mailbox, checks the SPF,
+DKIM, DMARC, and MTA-STS records that your domains publish, and exports the
+results as Prometheus metrics and a JSON API.
 
-See `docs/specs/report-ingest.md` for the design and the reasoning behind it.
+Website: <https://mailreportd.iodev.org>
 
-## What it does
+## Features
 
-Two things, and they answer different questions. Reports tell you what
-receivers made of your mail yesterday. Policy checks tell you what your DNS
-says right now.
+- Parses DMARC aggregate reports ([RFC 7489](https://www.rfc-editor.org/rfc/rfc7489)),
+  DMARC failure reports ([RFC 6591](https://www.rfc-editor.org/rfc/rfc6591)), and
+  SMTP TLS reports ([RFC 8460](https://www.rfc-editor.org/rfc/rfc8460)).
+- Reads reports from an IMAP mailbox or a maildir. Accepts TLS reports over
+  HTTPS (`POST /tlsrpt`) if you enable it.
+- Checks published records every 15 minutes by default:
+  - SPF: number of DNS lookups against the limit of 10.
+  - DKIM: selector state (`ok`, `missing`, `revoked`, `malformed`, `weak`) and
+    key size.
+  - DMARC: policy, subdomain policy, `pct`, and authorization of external
+    `rua` addresses.
+  - MTA-STS: mode, `max_age`, whether `mx` covers all MX hosts, and whether the
+    policy changed without a new `id`.
+- Classifies each sending server as `self`, `forwarder`, or `unknown` based on
+  your SPF record.
+- Encrypts failure report content at rest.
+- Never modifies the mailbox.
 
-### Report ingest
-
-- **DMARC aggregate reports** (RFC 7489) — parsed into per-source authentication
-  results, tolerant of the ways real reporters deviate from the schema.
-- **SMTP TLS reports** (RFC 8460) — parsed into session and failure counts.
-  Accepted over mail and, opt-in, over HTTPS submission (`POST /tlsrpt`). The
-  daemon serves plain HTTP; put a TLS-terminating proxy in front.
-- **DMARC failure reports** (RFC 6591) — the failing message itself. The
-  content is recipient PII, so it is encrypted at rest with a key you provide
-  (`storage.failure_key_file`), kept on a separate 7-day retention, and every
-  content read is access-logged. Without a key, only the envelope is stored.
-  A failure report that fails to parse is quarantined under the same rule.
-- **Source classification** — each reporting source is resolved against the
-  domain's own published SPF record and bucketed as `self`, `forwarder` or
-  `unknown`. Nothing about your infrastructure is hardcoded; the bucket follows
-  your SPF record. It inherits SPF's blind spots, though. A shared include
-  (`include:_spf.google.com`) authorises every tenant of that provider, so
-  their mail counts as `self`. A service that signs with your domain but sends
-  from its own bounce domain lands in `forwarder`; list its addresses under
-  `classification.trusted_sources` to count it as `self`. Read `self` as
-  "authorised by your SPF record", not "sent by you".
-
-### Published policy health
-
-Reports arrive a day late and only if a receiver bothers. A broken policy is
-knowable now, from a lookup. Every check reads public DNS and public HTTPS and
-nothing else — no MTA API, no provider API, no privileged access.
-
-- **SPF health** (RFC 7208) — how many of the ten DNS lookups the record
-  consumes. Above ten it permerrors at real receivers, so SPF stops passing
-  entirely rather than degrading.
-- **DKIM selectors** (RFC 6376) — missing, revoked, malformed, weak or valid,
-  told apart. An empty `p=` is a revocation, not a typo, and needs a different
-  fix from a selector that was never published. Selectors must be listed in
-  config: DNS offers no way to enumerate names under `_domainkey`.
-
-  Do not alert on `revoked`. The rotation BCP has operators pre-publish blank
-  selector slots, so a healthy domain shows them routinely — Fastmail keeps two
-  of `fm1`/`fm2`/`fm3` empty while the third signs. Alert on `missing`,
-  `malformed` and `weak`.
-- **DMARC record** (RFC 7489) — the published policy, the resolved subdomain
-  policy, and `pct=`. Below 100 reads as enforcement while enforcing on a
-  sample.
-- **External destination authorisation** (RFC 7489 §7.1) — when `rua=` points
-  off-domain, that domain must authorise it. Without the record most large
-  receivers send nothing, and an empty mailbox looks like a quiet week.
-- **MTA-STS** (RFC 8461) — mode, `max_age`, whether `mx:` still covers your live
-  MX, and whether the policy body changed without its `id` being bumped. A
-  drifted `mx:` makes enforcing senders refuse delivery outright.
-
-DANE and BIMI are deliberately absent; `docs/specs/policy-health.md` says why.
-
-A check that cannot complete is not a check that failed. A DNS timeout leaves
-the verdict series absent and moves `mailreport_policy_check_errors_total`
-instead, so "we could not tell" never reads as "it is broken".
+mailreportd doesn't include a web UI, and it doesn't check DANE or BIMI. See
+[`docs/specs/policy-health.md`](docs/specs/policy-health.md) for the reasons.
 
 ## Install
 
-```console
-$ go install github.com/elsbrock/mailreportd@latest
-$ docker run -v ./config.yaml:/etc/mailreportd/config.yaml:ro -v mailreportd:/var/lib/mailreportd \
-    -e MAILREPORTD_IMAP_PASSWORD ghcr.io/elsbrock/mailreportd
-$ nix run github:elsbrock/mailreportd -- -config config.yaml
+Choose one of the following:
+
+```sh
+# Go 1.25 or later
+go install github.com/elsbrock/mailreportd@latest
+
+# Container image
+docker pull ghcr.io/elsbrock/mailreportd
+
+# Nix
+nix run github:elsbrock/mailreportd -- -config config.yaml
 ```
 
-Release binaries for Linux and macOS are on the
+Binaries for Linux and macOS are on the
 [releases page](https://github.com/elsbrock/mailreportd/releases). The flake
-also exports a NixOS module (`nixosModules.default`).
+also provides a NixOS module (`nixosModules.default`).
 
 ## Quick start
 
-```console
-$ mailreportd -config config.yaml -check     # validate configuration
-$ mailreportd -config config.yaml
-```
+1. Set the `rua` tag of your DMARC record, and of your TLS-RPT record, to an
+   address that delivers to an IMAP mailbox.
+1. Copy [`config.example.yaml`](config.example.yaml) to `config.yaml` and set
+   your domains, DKIM selectors, and mailbox.
+1. Validate the configuration:
 
-Copy `config.example.yaml` and point it at the mailbox your `rua=` address
-delivers to. The IMAP password is named by environment variable, never written
-in the file, so the file stays committable. The IMAP feeder reads `INBOX`
-plus whatever folder the server marks `\Junk` (RFC 6154), because spam
-filters regularly file reports there; set `include_junk: false` to skip it, or
-list folders explicitly with `mailboxes: [INBOX, Reports]`. The single-folder
-`mailbox:` key still works; setting it together with `mailboxes` is an error.
-The first poll after enabling Junk reads that folder from the start, so expect
-a one-off burst of late reports and a step in the numbers. A folder that
-cannot be read fails the run (`mailreport_ingest_errors_total`, and the
-last-success timestamp stops) even though the other folders were still
-ingested; the log names the folder. A locally delivered
-maildir works in place of IMAP: `type: maildir` with a `path`. The feeder reads `new/` and
-`cur/` and never renames, moves or deletes a file.
+   ```sh
+   mailreportd -config config.yaml -check
+   ```
+
+1. Start mailreportd:
+
+   ```sh
+   MAILREPORTD_IMAP_PASSWORD=... mailreportd -config config.yaml
+   ```
+
+   With Docker:
+
+   ```sh
+   docker run -d \
+     -v ./config.yaml:/etc/mailreportd/config.yaml:ro \
+     -v mailreportd:/var/lib/mailreportd \
+     -e MAILREPORTD_IMAP_PASSWORD \
+     -p 127.0.0.1:9188:9188 \
+     ghcr.io/elsbrock/mailreportd
+   ```
+
+1. Add `localhost:9188` to your Prometheus scrape targets.
+
+## Configuration
+
+All options are documented in [`config.example.yaml`](config.example.yaml).
+Things to know:
+
+- **Passwords.** Set the IMAP password with `password_env` or `password_file`.
+  The configuration file never contains it.
+- **Folders.** The IMAP feeder reads `INBOX` and the folder that the server marks
+  as `\Junk` (RFC 6154), because spam filters often file reports there. To read
+  other folders, set `mailboxes`. To skip Junk, set `include_junk: false`. If a
+  folder can't be read, the run counts as failed, even if other folders were
+  read.
+- **Maildir.** To read a local maildir instead of IMAP, use `type: maildir` and
+  set `path`.
+- **DKIM selectors.** List them under `policy.selectors`. DNS doesn't provide a
+  way to discover selectors.
+- **Failure reports.** To store their content, set `storage.failure_key_file`
+  to a file that contains a 32-byte hex key (`openssl rand -hex 32`). Without a
+  key, mailreportd stores only the report metadata.
+- **TLS report submission.** `POST /tlsrpt` is off by default. Enable it with
+  `http.tlsrpt_submission: true`. mailreportd serves plain HTTP, so put a
+  TLS-terminating proxy in front of it.
+
+### Source classification
+
+mailreportd checks each sending server against your domain's SPF record:
+
+| Class | Meaning |
+|---|---|
+| `self` | Your SPF record authorizes the server, or it's listed in `classification.trusted_sources`. |
+| `forwarder` | Your SPF record doesn't authorize the server, but the mail has an aligned DKIM signature. |
+| `unknown` | Neither. This includes spoofed mail. |
+
+`self` means "authorized by your SPF record", not "sent by you". If your SPF
+record includes a shared provider such as `include:_spf.google.com`, mail from
+other customers of that provider also counts as `self`. A service that signs
+with your domain but uses its own bounce domain counts as `forwarder`. To count
+it as `self`, add its addresses to `classification.trusted_sources`.
 
 ## Endpoints
 
-Two listeners, because they carry different things.
+mailreportd has two listeners.
 
-**Public** (`http.listen`) — safe to expose:
+The public listener (`http.listen`, default `:8088`):
 
-| Endpoint | Purpose |
+| Endpoint | Description |
 |---|---|
-| `GET /healthz` | liveness |
-| `POST /tlsrpt` | RFC 8460 report submission; only with `http.tlsrpt_submission: true` |
+| `GET /healthz` | Health check. |
+| `POST /tlsrpt` | TLS report submission. Only if `http.tlsrpt_submission` is `true`. |
 
-**Private** (`http.metrics_listen`) — keep on an internal interface:
+The private listener (`http.metrics_listen`, default `:9188`). Keep it on an
+internal interface, because it exposes your sending infrastructure:
 
-| Endpoint | Purpose |
+| Endpoint | Description |
 |---|---|
-| `GET /metrics` | Prometheus exposition |
-| `GET /api/v1/domains` | per-domain summary |
-| `GET /api/v1/sources` | per-source detail, worst offenders first |
-| `GET /api/v1/signers` | who is signing your mail, busiest first, with a per-day breakdown |
-| `GET /api/v1/reporters` | what each receiver reported, per domain, busiest first |
-| `GET /api/v1/failures` | failure report envelopes; `?include=content` decrypts and is logged |
-| `GET /api/v1/quarantine` | messages that failed to parse |
+| `GET /metrics` | Prometheus metrics. |
+| `GET /api/v1/domains` | Summary per domain. |
+| `GET /api/v1/sources` | Results per sending server, most failures first. |
+| `GET /api/v1/signers` | DKIM signing domains and selectors, with daily counts. |
+| `GET /api/v1/reporters` | Results per receiver and domain. |
+| `GET /api/v1/failures` | Failure report metadata. `?include=content` returns the decrypted content and logs the access. |
+| `GET /api/v1/quarantine` | Messages that failed to parse. |
 
-The read API exposes source addresses and reporter identities — together, your
-whole sending topology. That is why it is not on the public listener.
+Query parameters:
 
-`/api/v1/signers` answers a question the pass rate cannot: a DKIM signature can
-verify and still contribute nothing, because DMARC scores alignment rather than
-validity. Each entry carries `signature_pass` (the signature verified) beside
-`evaluated_dkim_pass` (the receiver's aligned verdict); a signer where the first
-is high and the second is not is signing your mail without carrying it. A relay
-signing under its own domain looks exactly like this.
+| Parameter | Endpoints | Description |
+|---|---|---|
+| `tenant` | All | Required if you configure more than one tenant. |
+| `window` | All except `/quarantine` | How far back to look, as a Go duration. Default `720h`. |
+| `limit` | All except `/domains` | Maximum number of entries. |
+| `domain` | `/sources`, `/signers`, `/reporters` | Filter by domain. |
+| `reporter` | `/sources`, `/signers` | Filter by receiver, for example `outlook.com`. |
 
-`relationship` is `exact`, `subdomain` or `foreign`, describing the signing
-domain against the policy domain. It is deliberately not called "aligned":
-relaxed alignment compares organizational domains, which needs a public suffix
-list, so two sibling subdomains report as `foreign` while actually aligning.
-The receiver's own verdict is the authority, and it is in the same response.
+### Find DKIM failures hidden by SPF
 
-Because the signing domain is chosen by whoever sends the message — including
-anyone spoofing you — the response is capped and always carries an `omitted`
-object with the signers and message volume the limit cut off. For the same
-reason `d=` is never a Prometheus label.
+Mail passes DMARC if either DKIM or SPF passes and aligns. The `passing` field
+counts DMARC passes. The `dkim_pass` and `spf_pass` fields count each mechanism
+separately. If `dkim_pass` is lower than `passing`, some mail passes on SPF
+only. To find it:
 
-`passing` counts mail that passed DMARC, which needs only one of DKIM or SPF
-to align. `/domains`, `/sources` and `/reporters` therefore also carry
-`dkim_pass` and `spf_pass`, the receiver's aligned verdict for each. A domain
-at full `passing` with `dkim_pass` below it is getting through on SPF alone.
-To find where:
-
-```
-/api/v1/domains                                    # dkim_pass < passing?
-/api/v1/reporters?domain=example.org               # which receiver saw it
-/api/v1/sources?domain=example.org&reporter=outlook.com&limit=1000
-/api/v1/signers?domain=example.org&reporter=outlook.com
+```sh
+curl localhost:9188/api/v1/domains
+curl 'localhost:9188/api/v1/reporters?domain=example.org'
+curl 'localhost:9188/api/v1/sources?domain=example.org&reporter=outlook.com&limit=1000'
+curl 'localhost:9188/api/v1/signers?domain=example.org&reporter=outlook.com'
 ```
 
-`/sources` sorts by `failing`, which is zero for SPF-only passes, so raise
-`limit` and look for `dkim_pass` below `passing`. Each signer in `/signers`
-carries `days`: `messages`, `signature_pass` and `evaluated_dkim_pass` per UTC
-day of the report window, so a signature that starts failing shows as a
-trend. Days without reports are left out rather than zero. Mail that arrived
-with no signature at all has no signer to break down; `/sources` still counts
-it.
-
-Query parameters: `tenant`; `window` (Go duration, default `720h`) on all but
-`/quarantine`; `limit` on every list except `/domains`; `domain` on
-`/sources`, `/signers` and `/reporters`; `reporter` on `/sources` and `/signers` (case-insensitive, e.g.
-`reporter=outlook.com`). `/reporters` also carries an `omitted` remainder.
+In `/signers`, `signature_pass` counts valid signatures and
+`evaluated_dkim_pass` counts signatures that the receiver accepted for DMARC. A
+signer with a high `signature_pass` and a low `evaluated_dkim_pass` signs with
+a domain that doesn't align with yours, for example a relay that signs with its
+own domain.
 
 ## Metrics
 
-Source addresses are **never** labels. A month of reports contains tens of
-thousands of distinct sources, most seen once; exporting them would destroy the
-time series database. The store keeps full detail, Prometheus gets bounded
-series, and the read API bridges the gap.
+Report metrics:
 
 | Metric | Labels |
 |---|---|
 | `mailreport_dmarc_messages` | `tenant`, `domain`, `disposition`, `dkim`, `spf`, `source_class`, `reporter` |
+| `mailreport_dmarc_policy` | `tenant`, `domain`, `p` |
 | `mailreport_tlsrpt_sessions` | `tenant`, `domain`, `policy_type`, `result` |
 | `mailreport_tlsrpt_failures` | `tenant`, `domain`, `result_type` |
 | `mailreport_report_last_received_timestamp_seconds` | `tenant`, `domain`, `format` |
 | `mailreport_raw_messages` | `tenant`, `state` |
-| `mailreport_spf_lookups`, `_spf_lookup_limit_exceeded`, `_spf_resolvable` | `tenant`, `domain` |
-| `mailreport_dmarc_policy` | `tenant`, `domain`, `p` |
-| `mailreport_ingest_messages_total`, `_ingest_reports_total`, `_ingest_errors_total` | `tenant`, `feeder`, … |
+| `mailreport_ingest_messages_total`, `mailreport_ingest_reports_total`, `mailreport_ingest_errors_total` | `tenant`, `feeder`, ... |
 | `mailreport_ingest_last_success_timestamp_seconds` | `tenant`, `feeder` |
 
-`reporter` is the reporting organization, lowercased (`google.com`,
-`outlook.com`). Anyone can send a report under any name, so only the
-`metrics.reporter_limit` (default 20) busiest reporters per tenant keep their
-name, cut to 64 characters; the rest are `other`, and a report without one is
-`unknown`. Queries
-that compare two `mailreport_dmarc_messages` selectors one-to-one need
-`ignoring(reporter)` or a `sum by (...)`.
-
-Published-policy series, from the checks rather than from reports:
+Published record metrics:
 
 | Metric | Labels |
 |---|---|
+| `mailreport_spf_lookups`, `mailreport_spf_lookup_limit_exceeded`, `mailreport_spf_resolvable` | `tenant`, `domain` |
 | `mailreport_dkim_record_state` | `tenant`, `domain`, `selector`, `state` |
-| `mailreport_dkim_key_bits`, `_dkim_record_testing` | `tenant`, `domain`, `selector` |
-| `mailreport_dmarc_record_valid`, `_dmarc_record_pct` | `tenant`, `domain` |
+| `mailreport_dkim_key_bits`, `mailreport_dkim_record_testing` | `tenant`, `domain`, `selector` |
+| `mailreport_dmarc_record_valid`, `mailreport_dmarc_record_pct` | `tenant`, `domain` |
 | `mailreport_dmarc_record_policy` | `tenant`, `domain`, `p`, `sp` |
 | `mailreport_dmarc_rua_authorized` | `tenant`, `domain`, `rua_domain` |
-| `mailreport_mtasts_record_valid`, `_mtasts_mx_covered`, `_mtasts_stale_id`, `_mtasts_max_age_seconds` | `tenant`, `domain` |
+| `mailreport_mtasts_record_valid`, `mailreport_mtasts_mx_covered`, `mailreport_mtasts_stale_id`, `mailreport_mtasts_max_age_seconds` | `tenant`, `domain` |
 | `mailreport_mtasts_policy` | `tenant`, `domain`, `mode` |
 | `mailreport_policy_check_timestamp_seconds` | `tenant`, `domain` |
 | `mailreport_policy_check_errors_total` | `tenant`, `domain`, `check` |
 
-`mailreport_dmarc_policy` and `mailreport_dmarc_record_policy` are not the same
-thing. The first is the policy a reporter observed when it evaluated your mail;
-the second is what you publish today. When they disagree, either a change has
-not propagated or somebody's resolver sees a different answer than yours.
+Notes:
 
-Report volumes are **gauges over a rolling window**, not counters: they are
-recomputed from stored reports that arrive late and out of order, so a counter
-would lie about rates. Alert on ratios within the window.
+- Report metrics are gauges over the last `metrics.window` (default 30 days),
+  not counters. Reports arrive late and out of order, so mailreportd recomputes
+  them from stored data. Use ratios, not `rate()`.
+- Source IP addresses and DKIM signing domains are never labels. Senders choose
+  these values, so they would create unbounded series. Use the JSON API for
+  them.
+- `reporter` is the receiver's organization name, for example `google.com`. Only
+  the `metrics.reporter_limit` (default 20) receivers with the most reports keep
+  their name. Others are reported as `other`.
+- `mailreport_dmarc_policy` is the policy that receivers saw.
+  `mailreport_dmarc_record_policy` is the policy that you publish now.
+- If a check can't complete, for example because of a DNS timeout,
+  mailreportd increments `mailreport_policy_check_errors_total` and doesn't
+  report the record as broken.
+- mailreportd rebuilds metrics every `metrics.refresh_interval` (default 1m).
+  Scrapes return the cached result.
 
-`_report_last_received_timestamp_seconds` exists so staleness is expressible.
-A zero failure rate because nothing was ingested looks identical to a zero
-failure rate because nothing failed — that distinction is the whole point.
+## Alerts and dashboards
 
-Metrics are rebuilt on `metrics.refresh_interval` and scrapes serve the cached
-snapshot, so a scrape never blocks on SQLite or DNS. That interval, not the
-scrape interval, bounds staleness.
+- [`contrib/prometheus/alerts.yaml`](contrib/prometheus/alerts.yaml): alerting
+  rules.
+- [`contrib/grafana/mailreportd.json`](contrib/grafana/mailreportd.json): a
+  Grafana dashboard.
 
-## Suggested alerts
-
-Two signals are worth waking someone for, and one explicitly is not. Ready-made
-rules are in `contrib/prometheus/alerts.yaml`, and a Grafana dashboard in
-`contrib/grafana/mailreportd.json`.
-
-- **Authentication regression** — the pass rate for `source_class="self"` drops
-  over a sustained window. Your own mail is failing somewhere.
-- **TLS failures** — `mailreport_tlsrpt_failures` above zero. There is no
-  acceptable baseline for senders failing to negotiate TLS with you.
-- **Not report volume.** Aggregate reports arriving late or not at all is
-  normal and not actionable.
+Don't alert on DKIM selectors in the `revoked` state. Many providers publish
+empty selectors for key rotation. Don't alert on report volume either:
+receivers send reports late or not at all.
 
 ## Retention
 
-A sweep runs every `storage.sweep_interval` (default 6h) and applies these
-windows, all set under `storage.retention`:
+mailreportd deletes old data every `storage.sweep_interval` (default 6h). Set
+the retention periods under `storage.retention`:
 
 | Data | Key | Default |
 |---|---|---|
-| Aggregate and TLS report rows, by report end date | `aggregate` | 365 days |
-| Failure report content, including failure reports in quarantine | `forensic` | 7 days |
-| Raw message bytes | `raw` | 7 days |
+| Aggregate and TLS report data | `aggregate` | 365 days |
+| Failure report content, including quarantined failure reports | `forensic` | 7 days |
+| Raw message content | `raw` | 7 days |
 
-Quarantined messages other than failure reports are kept until you delete them,
-because they are the evidence for a parser fix. Exported metrics cover the last
-`metrics.window` (default 30 days). mailreportd never deletes mail from the
-mailbox, so the mailbox is also the source for a full reprocess.
+Other quarantined messages are kept until you delete them, so that you can
+reprocess them after a parser fix.
 
-## Operational notes
+## Operations
 
-- **Nothing in the mailbox is modified.** The feeder opens each folder
-  read-only, peeks rather than marking read, and tracks its own position per
-  folder. Nothing is moved out of Junk. The mailbox stays usable by a human or
-  another tool.
-- **Ingest is idempotent** at two levels: identical message bytes by checksum,
-  and the same report arriving under different envelopes by report identity.
-  Reprocessing the whole mailbox is safe and is the supported recovery path —
-  stop the daemon, delete the feeder's rows from the `feeder_cursor` table in
-  the database at `storage.path` (`feeder` is `<name>/<folder>`, where `name`
-  defaults to `imap-<index>` unless set on the feeder), and start it again.
-- **Nothing is deleted because it failed to parse.** Unparseable reports go to
-  quarantine with the error and the original bytes, and survive retention
-  sweeps. Autoreplies and spam are recorded as ignored, not as failures, so
-  quarantine stays a signal worth alerting on.
-- **Renaming a feeder makes it rescan** from the beginning, because the name is
-  part of its cursor key. Harmless, but it will re-download the mailbox.
-  Upgrading from a single-folder release keeps the existing cursor for the
-  first folder in `mailboxes`, provided the feeder name is unchanged; put the
-  folder the old `mailbox` pointed at first.
+- **Mailbox access is read-only.** mailreportd doesn't flag, move, or delete
+  messages. It stores its position for each folder in the database.
+- **Ingestion is idempotent.** mailreportd skips messages it already processed
+  and reports it already stored.
+- **Reprocess the mailbox.** Stop mailreportd, delete the feeder's rows from the
+  `feeder_cursor` table, and start mailreportd again. The `feeder` column has
+  the format `<name>/<folder>`. The default name is `imap-<index>`.
+- **Renaming a feeder** also makes mailreportd read the mailbox from the start.
+- **Quarantine.** Messages that fail to parse are stored with the error.
+  Autoreplies and spam are recorded as ignored, not quarantined.
 
 ## Development
 
-```console
-$ go test ./...          # unit and end-to-end
-$ go test -race ./...
-$ nix build              # builds and runs the suite
+```sh
+go test ./...
+go test -race ./...
+go vet ./...
+nix build    # builds and runs the tests
 ```
 
-The end-to-end tests run a real IMAP server over a real socket and drive the
-assembled daemon through to `/metrics` and the JSON API. The feeder's
-correctness lives in protocol details, and a hand-rolled fake would only agree
-with whatever the feeder happens to do.
+The end-to-end tests run a real IMAP server and check the output of `/metrics`
+and the JSON API.
+
+Design records are in [`docs/specs/`](docs/specs/).
 
 ## Contributing
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md). Report security issues as described in
+See [`CONTRIBUTING.md`](CONTRIBUTING.md). To report a security issue, see
 [`SECURITY.md`](SECURITY.md).
 
 ## License
