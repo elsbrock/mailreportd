@@ -1,0 +1,116 @@
+# Suggested alerting rules for mailreportd.
+#
+# Report volumes are gauges over a rolling window, not counters, so these use
+# ratios between series rather than rate(). Published-policy series vanish when
+# a check could not complete (DNS timeout), so absence never fires an alert here.
+groups:
+  - name: mailreportd-delivery
+    rules:
+      # Your own mail failing DMARC (neither DKIM nor SPF passed) over the window.
+      - alert: MailreportdSelfAuthRegression
+        expr: |
+          sum by (tenant, domain) (mailreport_dmarc_messages{source_class="self", dkim!="pass", spf!="pass"})
+          / sum by (tenant, domain) (mailreport_dmarc_messages{source_class="self"})
+          > 0.05
+        for: 6h
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.domain }}: own mail is failing DMARC"
+          description: "{{ $value | humanizePercentage }} of source_class=self messages failed DMARC in the window."
+
+      # There is no acceptable baseline for senders failing to negotiate TLS.
+      - alert: MailreportdTLSFailures
+        expr: sum by (tenant, domain) (mailreport_tlsrpt_failures) > 0
+        for: 1h
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.domain }}: senders report TLS failures"
+          description: "{{ $value }} TLS-RPT failures in the window."
+
+  - name: mailreportd-policy
+    rules:
+      # revoked is deliberately excluded: it is an intentional end of life.
+      - alert: MailreportdDKIMRecordBroken
+        expr: mailreport_dkim_record_state{state=~"missing|malformed|weak"} == 1
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.domain }}: DKIM selector {{ $labels.selector }} is {{ $labels.state }}"
+
+      - alert: MailreportdSPFLookupLimitExceeded
+        expr: mailreport_spf_lookup_limit_exceeded == 1
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.domain }}: SPF needs more than 10 DNS lookups (permerror at receivers)"
+
+      - alert: MailreportdDMARCRUANotAuthorized
+        expr: mailreport_dmarc_rua_authorized == 0
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.domain }}: {{ $labels.rua_domain }} has no RFC 7489 authorization record, reports will not arrive"
+
+      - alert: MailreportdMTASTSMXNotCovered
+        expr: mailreport_mtasts_mx_covered == 0
+        for: 1h
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.domain }}: MX host not covered by the MTA-STS policy, enforcing senders will refuse delivery"
+
+      - alert: MailreportdMTASTSStaleID
+        expr: mailreport_mtasts_stale_id == 1
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.domain }}: MTA-STS policy changed without a new id, senders keep the old policy"
+
+      - alert: MailreportdPolicyCheckErrors
+        expr: increase(mailreport_policy_check_errors_total[1h]) > 0
+        for: 3h
+        labels:
+          severity: info
+        annotations:
+          summary: "{{ $labels.domain }}: {{ $labels.check }} check keeps failing to complete"
+
+  - name: mailreportd-pipeline
+    rules:
+      - alert: MailreportdIngestErrors
+        expr: increase(mailreport_ingest_errors_total[30m]) > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Feeder {{ $labels.feeder }} is failing, reports are not arriving"
+
+      - alert: MailreportdIngestStalled
+        expr: time() - mailreport_ingest_last_success_timestamp_seconds > 3600
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Feeder {{ $labels.feeder }} has not succeeded for over an hour"
+
+      # Unparseable reports are quarantined with their bytes; any growth is worth a look.
+      - alert: MailreportdQuarantineGrowing
+        expr: increase(mailreport_raw_messages{state="quarantined"}[1d]) > 0
+        labels:
+          severity: info
+        annotations:
+          summary: "Tenant {{ $labels.tenant }}: messages were quarantined in the last day"
+
+      # Info only: late or missing aggregate reports are normal and not actionable.
+      - alert: MailreportdNoRecentReports
+        expr: time() - mailreport_report_last_received_timestamp_seconds > 7 * 86400
+        for: 1h
+        labels:
+          severity: info
+        annotations:
+          summary: "{{ $labels.domain }}: no {{ $labels.format }} report for over 7 days"
