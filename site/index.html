@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mailreportd: Prometheus metrics for DMARC, TLS reporting, and mail DNS records</title>
+<meta name="description" content="mailreportd reads DMARC and SMTP TLS reports from a mailbox, checks SPF, DKIM, DMARC, and MTA-STS records, and exports the results as Prometheus metrics.">
+<link rel="canonical" href="https://mailreportd.iodev.org/">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<meta property="og:title" content="mailreportd">
+<meta property="og:description" content="Prometheus metrics for DMARC reports, TLS reports, and mail DNS records.">
+<meta property="og:type" content="website">
+<meta name="color-scheme" content="light dark">
+<meta name="author" content="Simon Elsbrock">
+<style>
+:root {
+  --bg: #fbfbf9;
+  --fg: #1b1b1a;
+  --muted: #62625e;
+  --rule: #e2e2dc;
+  --code-bg: #f1f1ec;
+  --ok: #2f7a3b;
+  --bad: #b3361f;
+  --accent: #17734a;
+  --code-rule: #e2e2dc;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #101211;
+    --fg: #e6e6e1;
+    --muted: #9a9a93;
+    --rule: #2c2c2a;
+    --code-bg: #171a18;
+    --ok: #79c287;
+    --bad: #ef8a73;
+    --accent: #5fd39b;
+    --code-rule: #2e322f;
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 16px/1.6 var(--sans);
+}
+main, header, footer { max-width: 46rem; margin: 0 auto; padding: 0 1rem; }
+header {
+  display: flex; align-items: baseline; gap: 1.25rem; flex-wrap: wrap;
+  padding-top: 1.5rem; padding-bottom: 1.5rem;
+  font-family: var(--mono); font-size: .875rem;
+}
+header .name { font-weight: 700; color: var(--fg); text-decoration: none; margin-right: auto; }
+header .gh { color: var(--fg); align-self: center; display: inline-flex; }
+header .gh:hover { color: var(--accent); }
+header .name::before { content: "▍"; color: var(--accent); margin-right: .25rem; }
+a { color: var(--fg); text-decoration-color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+a:hover { color: var(--accent); text-decoration-thickness: 2px; }
+h1 { font-size: 1.75rem; line-height: 1.25; margin: 2rem 0 1rem; letter-spacing: -.01em; }
+h2::before { content: "# "; font-family: var(--mono); color: var(--accent); font-weight: 400; }
+h2 {
+  font-size: 1.375rem; line-height: 1.3; font-weight: 700; color: var(--fg);
+  margin: 3.5rem 0 1rem; padding-top: 1.25rem; border-top: 1px solid var(--rule);
+}
+h3 { font-size: 1.0625rem; font-weight: 700; margin: 2rem 0 .75rem; }
+p { margin: 0 0 1rem; }
+.lede { font-size: 1.125rem; color: var(--fg); }
+.muted { color: var(--muted); }
+code, pre { font-family: var(--mono); font-size: .8125rem; }
+:not(pre) > code { background: var(--code-bg); padding: .1em .3em; border-radius: 3px; }
+pre {
+  background: var(--code-bg); border: 1px solid var(--code-rule); padding: .875rem 1rem; margin: 0 0 1.25rem;
+  overflow-x: auto; line-height: 1.55; border-radius: 4px;
+}
+pre .c { color: var(--muted); }
+pre .ok { color: var(--ok); }
+pre .bad { color: var(--bad); font-weight: 600; }
+.install { margin: 1.5rem 0 .5rem; font-size: .875rem; border-left: 3px solid var(--accent); }
+.install::before { content: "$ "; color: var(--accent); }
+pre .c { user-select: none; }
+dl.terms dt { margin: 1.25rem 0 .2rem; font-family: var(--mono); font-size: .875rem; color: var(--accent); }
+dl.terms dt:first-child { margin-top: 0; }
+dl.terms dd { margin: 0; }
+.links { font-family: var(--mono); font-size: .875rem; }
+.links a { margin-right: 1.25rem; }
+table { width: 100%; border-collapse: collapse; margin: 0 0 1.25rem; font-size: .9375rem; }
+th, td { text-align: left; vertical-align: top; padding: .5rem .75rem .5rem 0; border-bottom: 1px solid var(--rule); }
+th { font-weight: 700; font-size: .875rem; color: var(--fg); border-bottom-width: 2px; }
+td code { overflow-wrap: break-word; }
+table.stack td:first-child { width: 55%; }
+td:last-child { padding-right: 0; }
+ul, ol { padding-left: 1.25rem; margin: 0 0 1rem; }
+ol > li { margin-bottom: 1rem; }
+ol pre { margin-bottom: .75rem; }
+var { font-style: italic; }
+li { margin: 0 0 .4rem; }
+dl { margin: 0 0 1rem; }
+dt { font-weight: 600; margin-top: 1rem; }
+dd { margin: .25rem 0 0; }
+footer {
+  margin-top: 4rem; padding-top: 1.25rem; padding-bottom: 3rem;
+  border-top: 1px solid var(--rule);
+  font-family: var(--mono); font-size: .8125rem; color: var(--muted);
+}
+footer a { color: var(--muted); margin-right: 1.25rem; }
+footer .by { display: block; margin-bottom: .5rem; }
+footer .by a { margin: 0; color: var(--fg); }
+@media (max-width: 40rem) {
+  header .name { width: 100%; }
+  h1 { font-size: 1.5rem; }
+  .lede { font-size: 1.0625rem; }
+  table.stack, table.stack tbody, table.stack tr, table.stack td { display: block; width: 100%; }
+  table.stack thead { display: none; }
+  table.stack tr { padding: .5rem 0; border-bottom: 1px solid var(--rule); }
+  table.stack td { border: 0; padding: .125rem 0; }
+  table.stack td:first-child { width: 100%; }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <a class="name" href="./">mailreportd</a>
+  <a href="#monitors">What it monitors</a>
+  <a href="#get-started">Get started</a>
+  <a class="gh" href="https://github.com/elsbrock/mailreportd" aria-label="mailreportd on GitHub" title="GitHub"><svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 0-.27.01-1.13.01-2.2 0-.75-.25-1.23-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.67-.22-2.2.82-.64-.18-1.32-.27-2-.27-.68 0-1.36.09-2 .27-1.53-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.28-.82 2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.33-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.38A7.995 7.995 0 0 1 0 8c0-4.42 3.58-8 8-8Z"/></svg></a>
+</header>
+
+<main>
+
+<h1>Monitor DMARC, TLS reporting, and mail DNS records with Prometheus</h1>
+
+<p class="lede">mailreportd is a daemon that reads DMARC and SMTP TLS reports from a
+mailbox and checks the SPF, DKIM, DMARC, and MTA-STS records that your domain
+publishes. It exports the results as Prometheus metrics, so you can use your
+existing alerting to find out when mail authentication fails.</p>
+
+<p class="muted">mailreportd is a single Go binary. It needs a YAML configuration
+file and stores its data in SQLite. It doesn't include a web UI and doesn't
+integrate with a specific mail server.</p>
+
+<pre class="install">go install github.com/elsbrock/mailreportd@latest</pre>
+<p class="links">
+  <a href="https://github.com/elsbrock/mailreportd">Source code</a>
+  <a href="https://github.com/elsbrock/mailreportd/releases">Releases</a>
+  <a href="https://github.com/elsbrock/mailreportd#readme">Documentation</a>
+</p>
+
+<h2 id="background">Background</h2>
+
+<p>Receiving mail servers check several DNS records to decide whether mail that
+uses your domain is legitimate. Sending mail servers check other records to
+decide whether they can deliver to you securely.</p>
+
+<dl class="terms">
+  <dt>SPF</dt>
+  <dd>Lists the servers that are allowed to send mail for your domain.</dd>
+  <dt>DKIM</dt>
+  <dd>Publishes the public keys that receivers use to verify the signatures that
+    your servers add to outgoing mail. Each key is published under a name called a
+    selector.</dd>
+  <dt>DMARC</dt>
+  <dd>Tells receivers what to do with mail that fails both SPF and DKIM, for example
+    to reject it. It also tells receivers where to send reports.</dd>
+  <dt>DMARC reports</dt>
+  <dd>Receivers such as Gmail and Outlook send aggregate reports to the
+    <code>rua</code> address in your DMARC record, usually once a day. A report lists
+    the servers that sent mail using your domain, and whether that mail passed SPF,
+    DKIM, and DMARC. Some receivers also send failure reports about individual
+    messages.</dd>
+  <dt>MTA-STS</dt>
+  <dd>Tells sending servers that your MX hosts support TLS, and which hosts are
+    valid. Senders that enforce MTA-STS don't deliver mail over an unencrypted or
+    unverified connection.</dd>
+  <dt>SMTP TLS reports (TLS-RPT)</dt>
+  <dd>Sending servers report whether they could establish a TLS connection to your
+    MX hosts, usually once a day.</dd>
+</dl>
+
+<p>If one of these records is wrong, receivers can reject your mail or mark it as
+spam, and your own servers don't log an error. The reports show how receivers
+handled your mail, but they arrive as compressed XML and JSON attachments.
+mailreportd parses the reports, checks the records, and turns both into
+metrics that you can alert on.</p>
+
+<h2 id="monitors">What mailreportd monitors</h2>
+
+<p>mailreportd gets data from two sources:</p>
+<ul>
+  <li><strong>DNS and HTTPS.</strong> mailreportd checks your published records every
+    15 minutes by default.</li>
+  <li><strong>Reports from receivers.</strong> Receivers usually send aggregate reports
+    once a day, so report data is up to a day old.</li>
+</ul>
+
+<h3>Published records</h3>
+<table class="stack">
+  <thead><tr><th>Problem</th><th>Metric</th></tr></thead>
+  <tbody>
+    <tr><td>A DKIM selector is missing, malformed, or uses a key shorter than 1024 bits.</td>
+        <td><code>mailreport_<wbr>dkim_<wbr>record_<wbr>state</code></td></tr>
+    <tr><td>The SPF record requires more than 10 DNS lookups. Receivers return a
+        permanent error, and SPF fails for all of your mail.</td>
+        <td><code>mailreport_<wbr>spf_<wbr>lookup_<wbr>limit_<wbr>exceeded</code></td></tr>
+    <tr><td>An MX host isn't listed in the MTA-STS policy. Senders that enforce
+        MTA-STS don't deliver to that host.</td>
+        <td><code>mailreport_<wbr>mtasts_<wbr>mx_<wbr>covered</code></td></tr>
+    <tr><td>The MTA-STS policy changed, but its <code>id</code> value didn't. Senders
+        continue to use the cached policy until <code>max_age</code> expires.</td>
+        <td><code>mailreport_mtasts_stale_id</code></td></tr>
+    <tr><td>The <code>rua</code> address is on another domain that doesn't authorize it.
+        Most large receivers don't send reports in this case.</td>
+        <td><code>mailreport_<wbr>dmarc_<wbr>rua_<wbr>authorized</code></td></tr>
+    <tr><td>The DMARC <code>pct</code> value is less than 100, so the policy applies to
+        only part of your mail.</td>
+        <td><code>mailreport_dmarc_record_pct</code></td></tr>
+  </tbody>
+</table>
+
+<h3>Reports</h3>
+<table class="stack">
+  <thead><tr><th>Problem</th><th>Metric or endpoint</th></tr></thead>
+  <tbody>
+    <tr><td>Mail from your own servers fails DMARC at a receiver.</td>
+        <td><code>mailreport_<wbr>dmarc_<wbr>messages<wbr>{source_<wbr>class="self"}</code></td></tr>
+    <tr><td>Senders can't establish a TLS connection to your MX hosts, for example
+        because of an expired certificate.</td>
+        <td><code>mailreport_tlsrpt_failures</code></td></tr>
+    <tr><td>Mail that uses your domain comes from servers that your SPF record
+        doesn't authorize.</td>
+        <td><code>mailreport_<wbr>dmarc_<wbr>messages<wbr>{source_<wbr>class="unknown"}</code></td></tr>
+    <tr><td>DKIM fails, but mail still passes DMARC because SPF passes.</td>
+        <td><code>dkim_pass</code> field in <code>/api/v1/domains</code></td></tr>
+    <tr><td>Reports stop arriving.</td>
+        <td><code>mailreport_<wbr>report_<wbr>last_<wbr>received_<wbr>timestamp_<wbr>seconds</code></td></tr>
+  </tbody>
+</table>
+
+<h2>Example output</h2>
+
+<p>mailreportd serves metrics on a private listener:</p>
+<pre><span class="c">$ curl -s localhost:9188/metrics | grep example.org</span>
+mailreport_dkim_record_state{domain="example.org",selector="mail",state="ok",tenant="default"} 1
+mailreport_dkim_record_state{domain="example.org",selector="old",state="revoked",tenant="default"} 1
+<span class="bad">mailreport_mtasts_mx_covered{domain="example.org",tenant="default"} 0</span>
+mailreport_spf_lookups{domain="example.org",tenant="default"} 7
+mailreport_dmarc_record_policy{domain="example.org",p="reject",sp="reject",tenant="default"} 1
+mailreport_dmarc_messages{disposition="none",dkim="pass",domain="example.org",reporter="google.com",source_class="self",spf="pass",tenant="default"} 1843
+<span class="bad">mailreport_dmarc_messages{disposition="reject",dkim="fail",domain="example.org",reporter="google.com",source_class="unknown",spf="fail",tenant="default"} 412</span>
+mailreport_tlsrpt_sessions{domain="example.org",policy_type="sts",result="successful",tenant="default"} 2210</pre>
+
+<p>In this example, the highlighted lines show two problems. An MX host is missing
+from the MTA-STS policy (<code>mailreport_mtasts_mx_covered</code> is 0), and Google
+rejected 412 messages from a server that your SPF record doesn't authorize.</p>
+
+<p>The repository includes
+<a href="https://github.com/elsbrock/mailreportd/tree/main/contrib/prometheus">Prometheus alerting rules</a>
+and a
+<a href="https://github.com/elsbrock/mailreportd/tree/main/contrib/grafana">Grafana dashboard</a>
+for these metrics.</p>
+
+<p>To find the sources and receivers behind an alert, use the JSON API on the same listener:</p>
+<pre><span class="c">$ curl -s 'localhost:9188/api/v1/sources?domain=example.org&amp;limit=1'</span>
+{
+  "window_start": "2026-09-22T19:00:00Z",
+  "tenant": "default",
+  "sources": [
+    {
+      "source_ip": "203.0.113.24",
+      "domain": "example.org",
+      "total": 412,
+      "passing": 0,
+      "failing": 412,
+      "dkim_pass": 0,
+      "spf_pass": 0,
+      "quarantined": 0,
+      "rejected": 412,
+      "first_seen": "2026-10-19T00:00:00Z",
+      "last_seen": "2026-10-21T00:00:00Z"
+    }
+  ]
+}</pre>
+
+<h3>Label cardinality</h3>
+<p>Metrics don't use source IP addresses or DKIM signing domains as labels. Senders
+choose these values, so they can create an unlimited number of time series. Per-source
+data is available from the JSON API instead.</p>
+
+<h2>How it works</h2>
+<pre>rua mailbox  ── IMAP, read-only ─┐
+maildir      ────────────────────┼─▶ decode ─▶ parse ─▶ SQLite ─┬─▶ /metrics
+POST /tlsrpt ────────────────────┘                              └─▶ /api/v1/*
+DNS + HTTPS  ── SPF, DKIM, DMARC, MTA-STS ──────────────────────────▶ /metrics</pre>
+
+<ul>
+  <li><strong>Read-only mailbox access.</strong> mailreportd doesn't flag, move, or
+    delete messages. It reads <code>INBOX</code> and the folder that the server marks
+    as <code>\Junk</code>.</li>
+  <li><strong>Idempotent ingestion.</strong> mailreportd detects duplicate messages and
+    resent reports. You can reprocess the whole mailbox safely.</li>
+  <li><strong>Quarantine.</strong> mailreportd stores messages that it can't parse,
+    together with the error.</li>
+  <li><strong>Failure report encryption.</strong> DMARC failure reports contain
+    recipient data. mailreportd encrypts their content with a key that you provide,
+    deletes it after seven days, and logs every read. If you don't provide a key,
+    mailreportd stores only the report metadata.</li>
+  <li><strong>Retention.</strong> mailreportd keeps parsed reports for 365 days and
+    failure report content for 7 days by default. Exported metrics cover the last
+    30 days.</li>
+  <li><strong>Check errors.</strong> If a DNS lookup fails, mailreportd increments
+    <code>mailreport_policy_check_errors_total</code> instead of reporting the record
+    as broken.</li>
+</ul>
+
+<h2>Supported standards</h2>
+<table>
+  <thead><tr><th>Standard</th><th>Support</th></tr></thead>
+  <tbody>
+    <tr><td><a href="https://www.rfc-editor.org/rfc/rfc7489">RFC 7489</a></td><td>DMARC aggregate reports, DMARC record checks, external <code>rua</code> authorization</td></tr>
+    <tr><td><a href="https://www.rfc-editor.org/rfc/rfc6591">RFC 6591</a></td><td>DMARC failure reports</td></tr>
+    <tr><td><a href="https://www.rfc-editor.org/rfc/rfc8460">RFC 8460</a></td><td>SMTP TLS reports, by email or HTTPS</td></tr>
+    <tr><td><a href="https://www.rfc-editor.org/rfc/rfc7208">RFC 7208</a></td><td>SPF lookup count, source classification</td></tr>
+    <tr><td><a href="https://www.rfc-editor.org/rfc/rfc6376">RFC 6376</a></td><td>DKIM selector checks</td></tr>
+    <tr><td><a href="https://www.rfc-editor.org/rfc/rfc8461">RFC 8461</a></td><td>MTA-STS policy checks</td></tr>
+  </tbody>
+</table>
+<p class="muted">mailreportd doesn't check DANE or BIMI records.</p>
+
+<h2>Comparison with other tools</h2>
+<dl>
+  <dt><a href="https://github.com/domainaware/parsedmarc">parsedmarc</a></dt>
+  <dd>Parses aggregate, failure, and TLS reports, and sends the results to
+    Elasticsearch, OpenSearch, Splunk, and other outputs. It doesn't export
+    Prometheus metrics or check DNS records.</dd>
+  <dt><a href="https://github.com/jgosmann/dmarc-metrics-exporter">dmarc-metrics-exporter</a></dt>
+  <dd>Exports Prometheus metrics for DMARC aggregate reports. It doesn't process
+    TLS reports or check DNS records, and it moves processed messages to other
+    folders.</dd>
+  <dt><a href="https://github.com/cry-inc/dmarc-report-viewer">dmarc-report-viewer</a></dt>
+  <dd>Shows DMARC and TLS reports in a web UI. It doesn't export metrics.</dd>
+  <dt>Hosted services</dt>
+  <dd>Services such as URIports, dmarcian, EasyDMARC, and Postmark process reports
+    for you. Your report data is sent to the service provider.</dd>
+</dl>
+
+<h2 id="get-started">Get started</h2>
+<ol>
+  <li>
+    <p>Install mailreportd:</p>
+    <pre>go install github.com/elsbrock/mailreportd@latest</pre>
+    <p>You can also use the container image <code>ghcr.io/elsbrock/mailreportd</code>,
+    a <a href="https://github.com/elsbrock/mailreportd/releases">release binary</a>,
+    or the Nix flake.</p>
+  </li>
+  <li>
+    <p>Set the <code>rua</code> tag of your DMARC record and the <code>rua</code> tag
+    of your TLS-RPT record to an address that delivers to an IMAP mailbox.</p>
+  </li>
+  <li>
+    <p>Create a file named <code>config.yaml</code>:</p>
+<pre>tenants:
+  - id: default
+    domains: [example.org]
+policy:
+  selectors:
+    example.org: [mail]
+feeders:
+  - type: imap
+    tenant: default
+    host: mail.example.org
+    username: dmarc@example.org
+    password_env: MAILREPORTD_IMAP_PASSWORD
+storage:
+  path: /var/lib/mailreportd/reports.db</pre>
+    <p>List your DKIM selectors under <code>policy.selectors</code>. DNS doesn't
+    provide a way to discover them. For all options, see
+    <a href="https://github.com/elsbrock/mailreportd/blob/main/config.example.yaml"><code>config.example.yaml</code></a>.</p>
+  </li>
+  <li>
+    <p>Validate the configuration:</p>
+    <pre>mailreportd -config config.yaml -check</pre>
+  </li>
+  <li>
+    <p>Start mailreportd:</p>
+    <pre>MAILREPORTD_IMAP_PASSWORD=<var>PASSWORD</var> mailreportd -config config.yaml</pre>
+  </li>
+  <li>
+    <p>Add <code>localhost:9188</code> as a Prometheus scrape target.</p>
+  </li>
+</ol>
+
+</main>
+
+<footer>
+  <span class="by">Maintained by <a href="https://github.com/elsbrock">Simon Elsbrock</a></span>
+  <a href="https://github.com/elsbrock/mailreportd">github.com/elsbrock/mailreportd</a>
+  <a href="https://github.com/elsbrock/mailreportd/blob/main/LICENSE">MIT License</a>
+  <a href="https://github.com/elsbrock/mailreportd/blob/main/CONTRIBUTING.md">Contributing</a>
+</footer>
+
+</body>
+</html>
