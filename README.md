@@ -1,10 +1,12 @@
 # mailreportd
 
-Ingests DMARC aggregate and SMTP TLS reports from a mailbox, stores them, and
-exposes bounded aggregates for Prometheus plus per-source detail over JSON.
+Ingests DMARC aggregate, DMARC failure and SMTP TLS reports from a mailbox,
+checks the mail policies your domain publishes in DNS, and exposes bounded
+aggregates for Prometheus plus per-source detail over JSON.
 
 It knows protocols, not products. Inputs are RFC-defined report formats reached
-over IMAP; outputs are Prometheus text and a JSON API. No MTA admin API, no
+over IMAP, a maildir or HTTPS submission; outputs are Prometheus text and a
+JSON API. No MTA admin API, no
 delivery-provider API, no log tailing, no assumption that you run Grafana, Nix,
 or any particular mail server. A working install is one binary, one config file,
 and one mailbox.
@@ -22,15 +24,22 @@ says right now.
 - **DMARC aggregate reports** (RFC 7489) — parsed into per-source authentication
   results, tolerant of the ways real reporters deviate from the schema.
 - **SMTP TLS reports** (RFC 8460) — parsed into session and failure counts.
-  Accepted over mail and, opt-in, over HTTPS submission (`POST /tlsrpt`).
+  Accepted over mail and, opt-in, over HTTPS submission (`POST /tlsrpt`). The
+  daemon serves plain HTTP; put a TLS-terminating proxy in front.
 - **DMARC failure reports** (RFC 6591) — the failing message itself. The
   content is recipient PII, so it is encrypted at rest with a key you provide
   (`storage.failure_key_file`), kept on a separate 7-day retention, and every
   content read is access-logged. Without a key, only the envelope is stored.
+  A failure report that fails to parse is quarantined under the same rule.
 - **Source classification** — each reporting source is resolved against the
   domain's own published SPF record and bucketed as `self`, `forwarder` or
-  `unknown`. Nothing about your infrastructure is hardcoded, so this stays
-  correct when your infrastructure changes.
+  `unknown`. Nothing about your infrastructure is hardcoded; the bucket follows
+  your SPF record. It inherits SPF's blind spots, though. A shared include
+  (`include:_spf.google.com`) authorises every tenant of that provider, so
+  their mail counts as `self`. A service that signs with your domain but sends
+  from its own bounce domain lands in `forwarder`; list its addresses under
+  `classification.trusted_sources` to count it as `self`. Read `self` as
+  "authorised by your SPF record", not "sent by you".
 
 ### Published policy health
 
@@ -65,6 +74,19 @@ DANE and BIMI are deliberately absent; `docs/specs/policy-health.md` says why.
 A check that cannot complete is not a check that failed. A DNS timeout leaves
 the verdict series absent and moves `mailreport_policy_check_errors_total`
 instead, so "we could not tell" never reads as "it is broken".
+
+## Install
+
+```console
+$ go install github.com/elsbrock/mailreportd@latest
+$ docker run -v ./config.yaml:/etc/mailreportd/config.yaml:ro -v mailreportd:/var/lib/mailreportd \
+    -e MAILREPORTD_IMAP_PASSWORD ghcr.io/elsbrock/mailreportd
+$ nix run github:elsbrock/mailreportd -- -config config.yaml
+```
+
+Release binaries for Linux and macOS are on the
+[releases page](https://github.com/elsbrock/mailreportd/releases). The flake
+also exports a NixOS module (`nixosModules.default`).
 
 ## Quick start
 
@@ -218,7 +240,9 @@ scrape interval, bounds staleness.
 
 ## Suggested alerts
 
-Two signals are worth waking someone for, and one explicitly is not.
+Two signals are worth waking someone for, and one explicitly is not. Ready-made
+rules are in `contrib/prometheus/alerts.yaml`, and a Grafana dashboard in
+`contrib/grafana/mailreportd.json`.
 
 - **Authentication regression** — the pass rate for `source_class="self"` drops
   over a sustained window. Your own mail is failing somewhere.
@@ -261,3 +285,7 @@ The end-to-end tests run a real IMAP server over a real socket and drive the
 assembled daemon through to `/metrics` and the JSON API. The feeder's
 correctness lives in protocol details, and a hand-rolled fake would only agree
 with whatever the feeder happens to do.
+
+## License
+
+MIT
