@@ -10,8 +10,8 @@ documentation fixes, and code.
   `GET /api/v1/quarantine`.
 - For a new feature or a larger change, open an issue first so that we can agree
   on the approach before you write code.
-- Read [`PRODUCT.md`](PRODUCT.md) for the scope and non-goals. Changes that add a
-  web UI or depend on a specific MTA or mail provider are out of scope.
+- Changes that add a web UI or depend on a specific MTA or mail provider are out
+  of scope.
 
 ## Report samples
 
