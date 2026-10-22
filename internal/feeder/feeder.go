@@ -94,7 +94,7 @@ func record(tenant, name string, res store.IngestResult, stats *Stats) {
 
 	result := res.State
 	switch {
-	case res.Duplicate:
+	case res.Redundant():
 		result = "duplicate"
 		stats.Duplicate++
 	case res.State == store.StateIgnored:

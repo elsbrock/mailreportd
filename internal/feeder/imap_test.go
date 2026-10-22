@@ -194,6 +194,29 @@ func TestIMAPFeederIsIdempotentAcrossCursorReset(t *testing.T) {
 	}
 }
 
+func TestIMAPFeederCountsResentReportsAsDuplicates(t *testing.T) {
+	mailbox := imaptest.NewMailbox(t)
+	s := testStore(t)
+	ctx := context.Background()
+
+	// Google sometimes sends the same report twice as separate emails: the
+	// bytes differ, the report identity does not.
+	payload := imaptest.AggregateXML("report-a", "example.org", 10, 1)
+	mailbox.Deliver(t, imaptest.ReportMail(t, "Report Domain: example.org", "a.xml.gz", payload))
+	mailbox.Deliver(t, imaptest.ReportMail(t, "Report Domain: example.org (resent)", "a.xml.gz", payload))
+
+	stats, err := NewIMAP(feederConfig(t, mailbox, "mailbox", "default"), s, quietLogger()).Run(ctx)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if stats.Messages != 2 || stats.Reports != 1 {
+		t.Errorf("stats = %+v, want 2 messages and 1 report", stats)
+	}
+	if stats.Duplicate != 1 {
+		t.Errorf("duplicate = %d, want 1: the resent report must count as a duplicate", stats.Duplicate)
+	}
+}
+
 func TestIMAPFeederHandlesNonReports(t *testing.T) {
 	mailbox := imaptest.NewMailbox(t)
 	s := testStore(t)

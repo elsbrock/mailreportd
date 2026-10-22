@@ -98,7 +98,7 @@ func (h *TLSRPT) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result := res.State
-	if res.Duplicate {
+	if res.Redundant() {
 		result = "duplicate"
 	}
 	metrics.IngestMessages.WithLabelValues(tenant, FeederName, result).Inc()
@@ -108,7 +108,7 @@ func (h *TLSRPT) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	h.log.Info("tlsrpt submission",
 		"tenant", tenant, "reporter", rep.Reporter, "domain", rep.Domain,
-		"stored", res.Stored, "duplicate", res.Duplicate, "peer", r.RemoteAddr)
+		"stored", res.Stored, "duplicate", res.Redundant(), "peer", r.RemoteAddr)
 
 	// Idempotent by design, so a resend answers exactly like the original.
 	w.WriteHeader(http.StatusCreated)

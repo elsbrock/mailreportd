@@ -105,6 +105,12 @@ func TestIngestIsIdempotentOnReportIdentity(t *testing.T) {
 	if second.Stored != 0 || second.Skipped != 1 {
 		t.Errorf("second: stored = %d skipped = %d, want 0 and 1", second.Stored, second.Skipped)
 	}
+	if first.Redundant() {
+		t.Error("first ingest should not be redundant")
+	}
+	if !second.Redundant() {
+		t.Error("a resent report under a new envelope should be redundant")
+	}
 
 	sources, _ := s.DMARCSources(context.Background(), time.Time{})
 	var total int64

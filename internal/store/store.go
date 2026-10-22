@@ -169,6 +169,18 @@ type IngestResult struct {
 	State     string
 }
 
+// Redundant reports whether the message added nothing: either its exact bytes
+// were already ingested, or every report it carried was already stored under
+// the same identity. Receivers such as Google resend the same report as a
+// fresh email, which only the second case catches.
+//
+// The raw row of a report-level duplicate is kept. It is what lets a rescan
+// skip the message by checksum instead of decoding it again, and the sweep
+// removes it once it ages out, because no report references it.
+func (r IngestResult) Redundant() bool {
+	return r.Duplicate || (r.Stored == 0 && r.Skipped > 0)
+}
+
 // Ingest decodes, parses and stores one raw message in a single transaction.
 //
 // It is idempotent at two levels: identical message bytes are recognized by
